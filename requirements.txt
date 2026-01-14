@@ -1,0 +1,6 @@
+antlr4-python3-runtime==4.13.2
+debugpy==1.8.17
+packaging==25.0
+pip-autoremove==0.10.0
+pipdeptree==2.30.0
+setuptools==80.9.0
