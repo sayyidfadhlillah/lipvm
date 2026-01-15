@@ -1,7 +1,6 @@
 from antlr4 import *
 
 from .instructions.Addition import Addition
-from .instructions.Expression import Expression
 from .instructions.ForLoopPrimitive import ForLoopPrimitive
 from .instructions.LoadValue import LoadValue
 from .instructions.Multiplication import Multiplication
@@ -70,7 +69,7 @@ class Compiler(ParseTreeVisitor):
         self.visit(ctx.expression())
 
         # Push variable name value into the bytecode
-        self._bytecode.add(Value(ctx.identifier))
+        self._bytecode.add(Value(ctx.identifier.text))
 
         # Push instruction store value into the bytecode
         self._bytecode.add(StoreValue())
@@ -93,22 +92,26 @@ class Compiler(ParseTreeVisitor):
         #Left is a term. So, resolve that
         self.visit(ctx.leftVal)
 
-        # Right is a term. So, resolve that
-        self.visit(ctx.rightVal)
 
-        # Push the instruction to perform addition
-        self._bytecode.add(Addition())
+        if ctx.rightVal is not None:
+
+            # Right is a term. So, resolve that
+            self.visit(ctx.rightVal)
+
+            # Push the instruction to perform addition
+            self._bytecode.add(Addition())
 
     def visitTerm(self, ctx:LanguageParser.TermContext):
 
         # Left is a factor. So, resolve that
         self.visit(ctx.leftVal)
 
-        # Right is a factor. So, resolve that
-        self.visit(ctx.rightVal)
+        if ctx.rightVal is not None:
+            # Right is a factor. So, resolve that
+            self.visit(ctx.rightVal)
 
-        # Push the instruction to perform multiplication
-        self._bytecode.add(Multiplication())
+            # Push the instruction to perform multiplication
+            self._bytecode.add(Multiplication())
 
     def visitFactor(self, ctx: LanguageParser.FactorContext):
 
@@ -123,10 +126,6 @@ class Compiler(ParseTreeVisitor):
         else:
 
             self.visit(ctx.expression())
-
-
-    def visitFactor(self, ctx:LanguageParser.FactorContext):
-        return self.visitChildren(ctx)
 
     def visitColor(self, ctx:LanguageParser.ColorContext):
         self._bytecode.add(Value(ctx.code.text))

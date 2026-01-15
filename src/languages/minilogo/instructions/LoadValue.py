@@ -12,4 +12,5 @@ class LoadValue:
             value = environment.heap[variable_name]
             environment.stack.push(value)
 
-        raise KeyError(variable_name, " does not exist in the stack")
+        else:
+            raise KeyError(variable_name, " does not exist in the stack")
