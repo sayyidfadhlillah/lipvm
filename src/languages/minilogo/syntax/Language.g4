@@ -3,7 +3,7 @@ grammar Language;
 // Parser rules
 start: (command (NEWLINE+ | EOF))* EOF;
 
-move: 'move' x=NUMBER y=NUMBER;
+move: 'move' x=expression y=expression;
 
 color: 'color' code=COLOR;
 
@@ -19,7 +19,7 @@ varAssignment: identifier=ID '=' init=expression;
 
 factor: NUMBER |
         LPAREN expression RPAREN |
-        varAssignment;
+        ID;
 
 forloop: 'for' (varAssignment | varCall=ID) 'to' end=expression block;
 

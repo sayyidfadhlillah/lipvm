@@ -1,5 +1,7 @@
 from antlr4 import *
 
+from .instructions.Expression import Expression
+
 if "." in __name__:
     from .syntax.LanguageParser import LanguageParser
     from .instructions.Color import Color
@@ -18,6 +20,10 @@ from src.instructions.Snapshot import Snapshot
 from src.Bytecode import Bytecode
 
 class Compiler(ParseTreeVisitor):
+
+    def visitVarAssignment(self, ctx: LanguageParser.VarAssignmentContext):
+
+        self._bytecode.add(Expression(ctx.expression()))
 
     def visitMove(self, ctx:LanguageParser.MoveContext):
         self._bytecode.add(Snapshot())
