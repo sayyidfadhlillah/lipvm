@@ -9,7 +9,7 @@ color: 'color' code=COLOR;
 
 draw: 'down' NEWLINE (move NEWLINE)* 'up';
 
-block: LCBRACKET NEWLINE* (command (NEWLINE+)*)* RCBRACKET;
+block: LCBRACKET NEWLINE* (subcommands+=command NEWLINE*)* RCBRACKET;
 
 expression: leftVal=term (PLUS rightVal=term)*;
 
@@ -21,7 +21,10 @@ factor: NUMBER |
         LPAREN expression RPAREN |
         ID;
 
-forloop: 'for' (varAssignment | varCall=ID) 'to' end=expression block;
+forloop
+  : 'for' varAssignment 'to' end=expression block  # ForAssign
+  | 'for' varCall=ID       'to' end=expression block  # ForVar
+  ;
 
 command: draw | move | color | forloop | varAssignment;
 
