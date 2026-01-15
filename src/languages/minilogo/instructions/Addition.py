@@ -8,6 +8,6 @@ class Addition:
         right_val = environment.stack.pop()
         left_val = environment.stack.pop()
 
-        result = left_val + right_val
+        result = int(left_val) + int(right_val)
 
         environment.stack.push(result)

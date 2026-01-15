@@ -117,11 +117,13 @@ class Compiler(ParseTreeVisitor):
 
         if ctx.ID() is not None:
 
+            self._bytecode.add(Value(ctx.ID().getText()))
             self._bytecode.add(LoadValue())
 
         elif ctx.NUMBER() is not None:
 
-            self._bytecode.add(Value(ctx.NUMBER()))
+            int_val = int(ctx.NUMBER().getText())
+            self._bytecode.add(Value(int_val))
 
         else:
 
