@@ -1,11 +1,13 @@
 color #ff0000
 
+var = 0
+
 for var to 10 {
-    move 20+(var*20) 20+(var*20)
+    move 20+var*20 20+var*20
     down
-    move 30+(var*20) 20+(var*20)
-    move 30+(var*20) 30+(var*20)
-    move 20+(var*20) 30+(var*20)
-    move 20+(var*20) 20+(var*20)
+    move 60+var*20 20+var*20
+    move 60+var*20 60+var*20
+    move 20+var*20 60+var*20
+    move 20+var*20 20+var*20
     up
 }

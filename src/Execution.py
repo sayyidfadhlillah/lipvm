@@ -45,8 +45,9 @@ class Execution:
         instruction = self._bytecode.instructions[self._environment.ip]
 
         if type(instruction) is Snapshot:
+
             self._history.append(deepcopy(self._environment))
-            pass
+
         else:
             instruction.execute(self._environment)
 

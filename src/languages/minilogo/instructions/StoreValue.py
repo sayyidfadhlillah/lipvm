@@ -8,7 +8,4 @@ class StoreValue:
         var_name = environment.stack.pop()
         var_value = environment.stack.pop()
 
-        if var_name in environment.heap:
-            environment.heap[var_name].append(var_value)
-        else:
-            environment.heap[var_name] = var_value
+        environment.store_value_in_heap(var_name, var_value)

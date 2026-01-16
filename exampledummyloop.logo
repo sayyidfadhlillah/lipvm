@@ -1,0 +1,8 @@
+color #ff0000
+
+var = 0
+
+for var to 10 {
+    down
+    up
+}

@@ -7,10 +7,6 @@ class LoadValue:
 
         variable_name = environment.stack.pop()
 
-        if variable_name in environment.heap:
+        returned_value = environment.get_value_from_heap(variable_name)
 
-            value = environment.heap[variable_name]
-            environment.stack.push(value)
-
-        else:
-            raise KeyError(variable_name, " does not exist in the stack")
+        environment.stack.push(returned_value)
