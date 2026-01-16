@@ -32,11 +32,6 @@ class Execution:
         self._history = []
         self._environment = self._initial_environment
 
-    # def start(self):
-    #     while not (self._interrupt or self.ended()):
-    #         self.step_forward()
-    #     self._interrupt = False
-
     def start(self):
 
         while not (self._interrupt or self.ended()):
