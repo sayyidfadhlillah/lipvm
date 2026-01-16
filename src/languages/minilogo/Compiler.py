@@ -28,11 +28,12 @@ from src.instructions.Value import Value
 from src.instructions.Snapshot import Snapshot
 from src.Bytecode import Bytecode
 
+
 class Compiler(ParseTreeVisitor):
 
     # New implementation
     # Adding control flow, for loop
-    def visitForAssign(self, ctx:LanguageParser.ForAssignContext):
+    def visitForAssign(self, ctx: LanguageParser.ForAssignContext):
 
         # We only need random end loop identifier since the starting point exist already
         end_loop_identifier = uuid.uuid4().hex[:8]
@@ -87,7 +88,7 @@ class Compiler(ParseTreeVisitor):
         # Clean the starting and ending loop pointer
         self._bytecode.add(EraseValueFromHeap([start_loop_identifier, end_loop_identifier]))
 
-    def visitForVar(self, ctx:LanguageParser.ForVarContext):
+    def visitForVar(self, ctx: LanguageParser.ForVarContext):
 
         start_loop_identifier = uuid.uuid4().hex[:8]
         end_loop_identifier = uuid.uuid4().hex[:8]
@@ -134,22 +135,21 @@ class Compiler(ParseTreeVisitor):
         self._bytecode.add(Value(start_loop_identifier))
         self._bytecode.add(StoreValue())
 
-        #Jump to the loop starting point
+        # Jump to the loop starting point
         self._bytecode.add(Jump(starting_point_ip))
 
-        #get the loop end and patch it with that value
+        # get the loop end and patch it with that value
         ending_point_ip = self._bytecode.size() - 1
         jump_to_end_instruction.loopend_ip = ending_point_ip
 
         # Clean the starting and ending loop pointer
         self._bytecode.add(EraseValueFromHeap([start_loop_identifier, end_loop_identifier]))
 
-    def visitBlock(self, ctx:LanguageParser.BlockContext):
+    def visitBlock(self, ctx: LanguageParser.BlockContext):
 
         list_of_commands = ctx.subcommands
 
         for command in list_of_commands:
-
             self.visit(command)
 
     def visitVarAssignment(self, ctx: LanguageParser.VarAssignmentContext):
@@ -163,7 +163,7 @@ class Compiler(ParseTreeVisitor):
         # Push instruction store value into the bytecode
         self._bytecode.add(StoreValue())
 
-    def visitMove(self, ctx:LanguageParser.MoveContext):
+    def visitMove(self, ctx: LanguageParser.MoveContext):
 
         # In original implementation, movement is only represented by integers
         # Now, it uses an expression that might be a result from arithmetic operation with integers or
@@ -178,19 +178,17 @@ class Compiler(ParseTreeVisitor):
 
     def visitExpression(self, ctx: LanguageParser.ExpressionContext):
 
-        #Left is a term. So, resolve that
+        # Left is a term. So, resolve that
         self.visit(ctx.leftVal)
 
-
         if ctx.rightVal is not None:
-
             # Right is a term. So, resolve that
             self.visit(ctx.rightVal)
 
             # Push the instruction to perform addition
             self._bytecode.add(Addition())
 
-    def visitTerm(self, ctx:LanguageParser.TermContext):
+    def visitTerm(self, ctx: LanguageParser.TermContext):
 
         # Left is a factor. So, resolve that
         self.visit(ctx.leftVal)
@@ -218,22 +216,16 @@ class Compiler(ParseTreeVisitor):
 
             self.visit(ctx.expression())
 
-    def visitMove(self, ctx:LanguageParser.MoveContext):
-        self._bytecode.add(Snapshot())
-        self._bytecode.add(Value(int(ctx.y.text)))
-        self._bytecode.add(Value(int(ctx.x.text)))
-        self._bytecode.add(Move())
-
-    def visitColor(self, ctx:LanguageParser.ColorContext):
+    def visitColor(self, ctx: LanguageParser.ColorContext):
         self._bytecode.add(Value(ctx.code.text))
         self._bytecode.add(Color())
-        
-    def visitDraw(self, ctx:LanguageParser.DrawContext):
+
+    def visitDraw(self, ctx: LanguageParser.DrawContext):
         self._bytecode.add(StartDrawing())
         self.visitChildren(ctx)
         self._bytecode.add(StopDrawing())
-    
-    def visitStart(self, ctx:LanguageParser.StartContext):
+
+    def visitStart(self, ctx: LanguageParser.StartContext):
         self.visitChildren(ctx)
 
     def compile(self, ast):
