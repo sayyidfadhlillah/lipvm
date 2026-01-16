@@ -1,6 +1,7 @@
 from antlr4 import *
 
 from .instructions.Addition import Addition
+from .instructions.EraseValueFromHeap import EraseValueFromHeap
 from .instructions.ForLoopPrimitive import ForLoopPrimitive
 from .instructions.Increase import Increase
 from .instructions.Jump import Jump
@@ -34,17 +35,58 @@ class Compiler(ParseTreeVisitor):
     # Adding control flow, for loop
     def visitForAssign(self, ctx:LanguageParser.ForAssignContext):
 
+        # We only need random end loop identifier since the starting point exist already
+        end_loop_identifier = uuid.uuid4().hex[:8]
+
+        # Start loop comes from the local var assignment
+        var_assignment_context = ctx.varAssignment()
+        start_loop_identifier = ctx.varAssignment().identifier.text
+
+        # Value of the loop end
+        self.visit(ctx.end)
+
+        # Identifier of the loop end
+        self._bytecode.add(Value(end_loop_identifier))
+
+        # Push instruction store value into the bytecode, to save the ending loop value
+        self._bytecode.add(StoreValue())
+
+        # Value of the loop start is coming from assignment
+        # Resolve the var assignment and the starting point will be ready
+        self.visit(var_assignment_context)
+
+        # Mark the instruction point to jump, this is the starting point
+        starting_point_ip = self._bytecode.size() - 1
+
+        self._bytecode.add(Value(end_loop_identifier))
+        self._bytecode.add(LoadValue())
+
+        self._bytecode.add(Value(start_loop_identifier))
+        self._bytecode.add(LoadValue())
+
+        jump_to_end_instruction = JumpIfEqual()
+
+        self._bytecode.add(jump_to_end_instruction)
+
         # Evaluate the block
         self.visit(ctx.block())
 
-        # Push the for loop instruction
-        self._bytecode.add(ForLoopPrimitive())
+        # Add the starting pointer by one
+        self._bytecode.add(Value(start_loop_identifier))
+        self._bytecode.add(LoadValue())
+        self._bytecode.add(Increase())
+        self._bytecode.add(Value(start_loop_identifier))
+        self._bytecode.add(StoreValue())
 
-        # Evaluate value candidate for the starting point of the loop
-        self.visit(ctx.varAssignment())
+        # Jump to the loop starting point
+        self._bytecode.add(Jump(starting_point_ip))
 
-        # Evaluate value candidate for the end point of the loop
-        self.visit(ctx.end)
+        # get the loop end and patch it with that value
+        ending_point_ip = self._bytecode.size() - 1
+        jump_to_end_instruction.loopend_ip = ending_point_ip
+
+        # Clean the starting and ending loop pointer
+        self._bytecode.add(EraseValueFromHeap([start_loop_identifier, end_loop_identifier]))
 
     def visitForVar(self, ctx:LanguageParser.ForVarContext):
 
@@ -99,6 +141,9 @@ class Compiler(ParseTreeVisitor):
         #get the loop end and patch it with that value
         ending_point_ip = self._bytecode.size() - 1
         jump_to_end_instruction.loopend_ip = ending_point_ip
+
+        # Clean the starting and ending loop pointer
+        self._bytecode.add(EraseValueFromHeap([start_loop_identifier, end_loop_identifier]))
 
     def visitBlock(self, ctx:LanguageParser.BlockContext):
 

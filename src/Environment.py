@@ -29,6 +29,16 @@ class Environment:
     def heap(self):
         return self._heap
 
+    def remove_key_from_heap(self, key: str):
+
+        # Find the environment that owns it
+        if not self.is_key_exist_in_heap(key):
+
+            raise KeyError(key, " does not exist in current environment")
+
+        self._heap.pop(key)
+
+
     def is_key_exist_in_heap(self, key: str):
 
         return key in self._heap
@@ -44,6 +54,6 @@ class Environment:
 
             return self._heap[key]
 
-        raise KeyError(key, " does not exist in current environment and its enclosing environment")
+        raise KeyError(key, " does not exist in current environment")
 
 
