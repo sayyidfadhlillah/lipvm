@@ -2,7 +2,6 @@ from antlr4 import *
 
 from .instructions.Addition import Addition
 from .instructions.EraseValueFromHeap import EraseValueFromHeap
-from .instructions.ForLoopPrimitive import ForLoopPrimitive
 from .instructions.Increase import Increase
 from .instructions.Jump import Jump
 from .instructions.JumpIfEqual import JumpIfEqual
