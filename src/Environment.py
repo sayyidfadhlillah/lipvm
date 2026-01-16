@@ -27,6 +27,7 @@ class Environment:
 
     @property
     def heap(self):
+
         return self._heap
 
     def remove_key_from_heap(self, key: str):
@@ -37,7 +38,6 @@ class Environment:
             raise KeyError(key, " does not exist in current environment")
 
         self._heap.pop(key)
-
 
     def is_key_exist_in_heap(self, key: str):
 
@@ -55,5 +55,3 @@ class Environment:
             return self._heap[key]
 
         raise KeyError(key, " does not exist in current environment")
-
-

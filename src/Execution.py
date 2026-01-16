@@ -43,11 +43,8 @@ class Execution:
             raise Exception("Cannot step forward an execution that has ended")
 
         instruction = self._bytecode.instructions[self._environment.ip]
-
         if type(instruction) is Snapshot:
-
             self._history.append(deepcopy(self._environment))
-
         else:
             instruction.execute(self._environment)
 

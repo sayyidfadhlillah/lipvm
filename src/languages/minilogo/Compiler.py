@@ -218,6 +218,12 @@ class Compiler(ParseTreeVisitor):
 
             self.visit(ctx.expression())
 
+    def visitMove(self, ctx:LanguageParser.MoveContext):
+        self._bytecode.add(Snapshot())
+        self._bytecode.add(Value(int(ctx.y.text)))
+        self._bytecode.add(Value(int(ctx.x.text)))
+        self._bytecode.add(Move())
+
     def visitColor(self, ctx:LanguageParser.ColorContext):
         self._bytecode.add(Value(ctx.code.text))
         self._bytecode.add(Color())
