@@ -1,6 +1,7 @@
 from antlr4 import *
 
 from .instructions.Addition import Addition
+from .instructions.Division import Division
 from .instructions.EraseValueFromHeap import EraseValueFromHeap
 from .instructions.Increase import Increase
 from .instructions.Jump import Jump
@@ -8,6 +9,7 @@ from .instructions.JumpIfEqual import JumpIfEqual
 from .instructions.LoadValue import LoadValue
 from .instructions.Multiplication import Multiplication
 from .instructions.StoreValue import StoreValue
+from .instructions.Substraction import Substraction
 
 if "." in __name__:
     from .syntax.LanguageParser import LanguageParser
@@ -181,8 +183,14 @@ class Compiler(ParseTreeVisitor):
             # Right is a term. So, resolve that
             self.visit(ctx.rightVal)
 
-            # Push the instruction to perform addition
-            self._bytecode.add(Addition())
+            operand = ctx.op.text
+
+            if operand == '+':
+                # Push the instruction to perform addition
+                self._bytecode.add(Addition())
+            elif operand == '-':
+                # Push the instruction to perform substraction
+                self._bytecode.add(Substraction())
 
     def visitTerm(self, ctx: LanguageParser.TermContext):
 
@@ -193,8 +201,14 @@ class Compiler(ParseTreeVisitor):
             # Right is a factor. So, resolve that
             self.visit(ctx.rightVal)
 
-            # Push the instruction to perform multiplication
-            self._bytecode.add(Multiplication())
+            operand = ctx.op.text
+
+            if operand == '*':
+                # Push the instruction to perform addition
+                self._bytecode.add(Multiplication())
+            elif operand == '/':
+                # Push the instruction to perform substraction
+                self._bytecode.add(Division())
 
     def visitFactor(self, ctx: LanguageParser.FactorContext):
 

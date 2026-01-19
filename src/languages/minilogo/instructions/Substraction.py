@@ -1,7 +1,7 @@
 from instructions.AbstractInstruction import AbstractInstruction
 
 
-class Multiplication(AbstractInstruction):
+class Substraction(AbstractInstruction):
 
     def __str__(self):
 
@@ -16,6 +16,6 @@ class Multiplication(AbstractInstruction):
         right_val = environment.stack.pop()
         left_val = environment.stack.pop()
 
-        result = int(left_val) * int(right_val)
+        result = int(left_val) - int(right_val)
 
         environment.stack.push(result)

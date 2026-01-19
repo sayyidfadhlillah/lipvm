@@ -1,11 +1,11 @@
 from instructions.AbstractInstruction import AbstractInstruction
 
 
-class Multiplication(AbstractInstruction):
+class Division(AbstractInstruction):
 
     def __str__(self):
 
-        return 'Multiplication'
+        return 'Divide'
 
     def need_to_have_snapshot(self):
 
@@ -16,6 +16,6 @@ class Multiplication(AbstractInstruction):
         right_val = environment.stack.pop()
         left_val = environment.stack.pop()
 
-        result = int(left_val) * int(right_val)
+        result = int(left_val) / int(right_val)
 
         environment.stack.push(result)

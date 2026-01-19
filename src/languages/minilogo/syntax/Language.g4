@@ -11,9 +11,9 @@ draw: 'down' NEWLINE (move NEWLINE)* 'up';
 
 block: LCBRACKET NEWLINE* (subcommands+=command NEWLINE*)* RCBRACKET;
 
-expression: leftVal=term (PLUS rightVal=term)*;
+expression: leftVal=term (op=(PLUS|SUBSTRACT) rightVal=term)*;
 
-term: leftVal=factor (STAR rightVal=factor)*;
+term: leftVal=factor (op=(STAR|DIVIDE) rightVal=factor)*;
 
 varAssignment: identifier=ID '=' init=expression;
 
@@ -33,7 +33,9 @@ ID : [a-zA-Z][a-zA-Z0-9]*;
 NUMBER: '-'?[0-9]+;
 
 PLUS   : '+' ;
+SUBSTRACT   : '-' ;
 STAR   : '*' ;
+DIVIDE   : '/' ;
 LPAREN : '(' ;
 RPAREN : ')' ;
 LCBRACKET: '{';
