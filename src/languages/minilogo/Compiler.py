@@ -9,7 +9,7 @@ from .instructions.JumpIfEqual import JumpIfEqual
 from .instructions.LoadValue import LoadValue
 from .instructions.Multiplication import Multiplication
 from .instructions.StoreValue import StoreValue
-from .instructions.Substraction import Substraction
+from .instructions.Subtraction import Subtraction
 
 if "." in __name__:
     from .syntax.LanguageParser import LanguageParser
@@ -190,7 +190,7 @@ class Compiler(ParseTreeVisitor):
                 self._bytecode.add(Addition())
             elif operand == '-':
                 # Push the instruction to perform substraction
-                self._bytecode.add(Substraction())
+                self._bytecode.add(Subtraction())
 
     def visitTerm(self, ctx: LanguageParser.TermContext):
 

@@ -1,11 +1,11 @@
 from instructions.AbstractInstruction import AbstractInstruction
 
 
-class Substraction(AbstractInstruction):
+class Subtraction(AbstractInstruction):
 
     def __str__(self):
 
-        return 'Multiplication'
+        return 'Subtraction'
 
     def need_to_have_snapshot(self):
 

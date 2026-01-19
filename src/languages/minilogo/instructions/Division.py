@@ -5,7 +5,7 @@ class Division(AbstractInstruction):
 
     def __str__(self):
 
-        return 'Divide'
+        return 'Division'
 
     def need_to_have_snapshot(self):
 
