@@ -1,7 +1,14 @@
-class StoreValue:
+from instructions.AbstractInstruction import AbstractInstruction
+
+
+class StoreValue(AbstractInstruction):
 
     def __str__(self):
         return 'StoreValue'
+
+    def need_to_have_snapshot(self):
+
+        return False
 
     def execute(self, environment):
 

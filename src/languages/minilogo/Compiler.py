@@ -168,10 +168,6 @@ class Compiler(ParseTreeVisitor):
         # In original implementation, movement is only represented by integers
         # Now, it uses an expression that might be a result from arithmetic operation with integers or
         # value of a particular variable
-        # self._bytecode.add(Value(int(ctx.y.text)))
-        # self._bytecode.add(Value(int(ctx.x.text)))
-
-        self._bytecode.add(Snapshot())
         self.visit(ctx.x)
         self.visit(ctx.y)
         self._bytecode.add(Move())

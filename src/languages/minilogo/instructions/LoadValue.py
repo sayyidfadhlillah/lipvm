@@ -1,7 +1,14 @@
-class LoadValue:
+from instructions.AbstractInstruction import AbstractInstruction
+
+
+class LoadValue(AbstractInstruction):
 
     def __str__(self):
         return 'LoadValue'
+
+    def need_to_have_snapshot(self):
+
+        return False
 
     def execute(self, environment):
 

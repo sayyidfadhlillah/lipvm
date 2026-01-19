@@ -1,7 +1,9 @@
 from typing import List
 
+from instructions.AbstractInstruction import AbstractInstruction
 
-class EraseValueFromHeap:
+
+class EraseValueFromHeap(AbstractInstruction):
 
     def __init__(self, keys: List[str]):
 
@@ -10,6 +12,10 @@ class EraseValueFromHeap:
     def __str__(self):
 
         return "EraseValueFromHeap"
+
+    def need_to_have_snapshot(self):
+
+        return False
 
     def execute(self, environment):
 

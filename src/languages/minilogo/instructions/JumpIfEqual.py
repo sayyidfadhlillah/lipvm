@@ -1,4 +1,7 @@
-class JumpIfEqual:
+from instructions.AbstractInstruction import AbstractInstruction
+
+
+class JumpIfEqual(AbstractInstruction):
 
     def __init__(self):
 
@@ -13,6 +16,10 @@ class JumpIfEqual:
     def loopend_ip(self, loopend_ip):
 
         self._loopend_ip = loopend_ip
+
+    def need_to_have_snapshot(self):
+
+        return False
 
     def __str__(self):
         return 'JumpWithCondition'

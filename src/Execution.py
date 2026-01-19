@@ -1,8 +1,4 @@
-from .Environment import Environment
-from .Bytecode import Bytecode
-from .Stack import Stack
-
-from .instructions.Snapshot import Snapshot
+from instructions.AbstractInstruction import AbstractInstruction
 
 from copy import deepcopy
 
@@ -51,17 +47,18 @@ class Execution:
         if self.ended():
             raise Exception("Cannot step forward an execution that has ended")
 
-        instruction_is_a_snapshot: bool = False
+        instruction_needs_a_snapshot: bool = False
 
-        while not (self._interrupt or self.ended() or instruction_is_a_snapshot):
+        while not (self._interrupt or self.ended() or instruction_needs_a_snapshot):
 
-            instruction = self._bytecode.instructions[self._environment.ip]
-            instruction_is_a_snapshot = type(instruction) is Snapshot
+            instruction: AbstractInstruction = self._bytecode.instructions[self._environment.ip]
+            instruction_needs_a_snapshot = instruction.need_to_have_snapshot()
 
-            if instruction_is_a_snapshot:
+            if instruction_needs_a_snapshot:
+
                 self._history.append(deepcopy(self._environment))
-            else:
-                instruction.execute(self._environment)
+
+            instruction.execute(self._environment)
 
             self._environment.ip += 1
 

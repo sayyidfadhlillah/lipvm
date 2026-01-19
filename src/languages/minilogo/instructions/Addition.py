@@ -1,7 +1,14 @@
-class Addition:
+from instructions.AbstractInstruction import AbstractInstruction
+
+
+class Addition(AbstractInstruction):
 
     def __str__(self):
         return 'Addition'
+
+    def need_to_have_snapshot(self):
+
+        return False
 
     def execute(self, environment):
 

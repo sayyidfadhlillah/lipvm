@@ -1,8 +1,15 @@
-class Multiplication:
+from instructions.AbstractInstruction import AbstractInstruction
+
+
+class Multiplication(AbstractInstruction):
 
     def __str__(self):
 
         return 'Multiplication'
+
+    def need_to_have_snapshot(self):
+
+        return False
 
     def execute(self, environment):
 
