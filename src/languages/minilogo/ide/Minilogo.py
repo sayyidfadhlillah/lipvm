@@ -36,6 +36,7 @@ class Minilogo(Tk):
 
         # Slider represents the timeline. We keep it enabled so it can display a position
         # and (optionally) allow manual navigation too. Buttons will also move it.
+        self._slider_current_position = 0
         self._slider = Scale(
             self._buttons,
             from_=0,
@@ -97,36 +98,45 @@ class Minilogo(Tk):
 
         # Timeline range based on history length.
         # If your ip is an index into history, the max valid index is len(history)-1.
-        max_step = max(0, len(self._execution.history) - 1)
+        history_max_pointers = len(self._execution.history) - 1
+        max_step = max(0, history_max_pointers)
 
         self._slider.config(state=NORMAL, from_=0, to=max_step)
 
         # Sync slider with current state
-        self._slider.set(len(self._execution.history) - 1)
+        self._slider.set(history_max_pointers)
+        self._slider_current_position = history_max_pointers
 
     def step_forward(self):
-
-        self._execution.step_forward()
 
         target = int(float(self._slider.get())) + 1
         self._slider.set(target)
 
-        self.draw()
-
     def step_backward(self):
-
-        self._execution.step_backward()
 
         target = int(float(self._slider.get())) - 1
         self._slider.set(target)
 
         self.draw()
 
-    def navigate(self, value):
+    def navigate(self, target_position_str):
 
         # If user drags the slider, apply that timeline too
         if not self._execution:
             return
+
+        target_position = int(target_position_str)
+
+        if self._slider_current_position > target_position:
+
+            self._execution.step_backward()
+
+        elif self._slider_current_position < target_position:
+
+            self._execution.step_forward()
+
+        self.draw()
+        self._slider_current_position = target_position
 
     def draw(self):
         self._canvas.delete("all")
