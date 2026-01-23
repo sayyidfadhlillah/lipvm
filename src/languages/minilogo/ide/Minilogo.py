@@ -7,7 +7,7 @@ from src.LipVM import LipVM
 
 class Minilogo(Tk):
 
-    def __init__(self, *args, **kwargs):        
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
         self.title("Minilogo")
@@ -18,15 +18,14 @@ class Minilogo(Tk):
         self.layout()
 
         self._vm = LipVM()
-
         self._execution = None
-        
+
     def components(self):
         self._panes = ttk.PanedWindow(self, orient=HORIZONTAL)
 
-        self._code_pane = Frame(self._panes, bg="white")  
+        self._code_pane = Frame(self._panes, bg="white")
         self._preview_pane = Frame(self._panes, bg="white")
-    
+
         self._panes.add(self._code_pane, weight=1)
         self._panes.add(self._preview_pane, weight=1)
 
@@ -35,7 +34,18 @@ class Minilogo(Tk):
         self._canvas = Canvas(self._preview_pane, bg="white")
         self._buttons = Frame(self._preview_pane)
 
-        self._slider = Scale(self._buttons, from_=0, to=200, orient=HORIZONTAL, state=NORMAL, command=self.navigate)
+        # Slider represents the timeline. We keep it enabled so it can display a position
+        # and (optionally) allow manual navigation too. Buttons will also move it.
+        self._slider_current_position = 0
+        self._slider = Scale(
+            self._buttons,
+            from_=0,
+            to=0,
+            orient=HORIZONTAL,
+            state=DISABLED,
+            command=self.navigate
+        )
+
         self._start_button = Button(self._buttons, text="Run", command=self.start)
         self._step_forward_button = Button(self._buttons, text="Step forward", command=self.step_forward)
         self._step_backward_button = Button(self._buttons, text="Step backward", command=self.step_backward)
@@ -44,7 +54,7 @@ class Minilogo(Tk):
         self._code.bind("<KeyRelease>", self.compile)
 
     def layout(self):
-        # Main layout 
+        # Main layout
         self._panes.pack(fill=BOTH, expand=True)
 
         # Code layout
@@ -53,7 +63,7 @@ class Minilogo(Tk):
         # Preview layout
         self._canvas.pack(fill=BOTH, expand=True)
         self._buttons.pack(fill=X, expand=False)
-        
+
         # Buttons layout
         self._buttons.grid_rowconfigure(0, weight=1)
         self._buttons.grid_rowconfigure(1, weight=1)
@@ -70,46 +80,78 @@ class Minilogo(Tk):
     def code(self):
         return self._code.get('1.0', END)
 
-    def compile(self, event):
+    def compile(self, event=None):
         self._execution = self._vm.compile_code(self.code())
-        self._slider.config(state=DISABLED)
+
+        # Reset UI + timeline
         self._canvas.delete("all")
+        self._slider.config(state=DISABLED, from_=0, to=0)
+        self._slider.set(0)
 
     def start(self):
+
+        if not self._execution:
+            return
+
         self._execution.start()
         self.draw()
 
-        self._slider.config(state=NORMAL, to=len(self._execution.history))
+        # Timeline range based on history length.
+        # If your ip is an index into history, the max valid index is len(history)-1.
+        history_max_pointers = len(self._execution.history) - 1
+        max_step = max(0, history_max_pointers)
+
+        self._slider.config(state=NORMAL, from_=0, to=max_step)
+
+        # Sync slider with current state
+        self._slider.set(history_max_pointers)
+        self._slider_current_position = history_max_pointers
 
     def step_forward(self):
-        self._execution.step_forward()
-        self.draw()
+
+        target = int(float(self._slider.get())) + 1
+        self._slider.set(target)
 
     def step_backward(self):
-        self._execution.step_backward()
+
+        target = int(float(self._slider.get())) - 1
+        self._slider.set(target)
+
         self.draw()
 
-    def navigate(self, event):
-        if self._execution.environment.ip > int(event):
-            self.step_backward()
-        
-        if self._execution.environment.ip < int(event):
-            self.step_forward()
+    def navigate(self, target_position_str):
+
+        # If user drags the slider, apply that timeline too
+        if not self._execution:
+            return
+
+        target_position = int(target_position_str)
+
+        if self._slider_current_position > target_position:
+
+            self._execution.step_backward()
+
+        elif self._slider_current_position < target_position:
+
+            self._execution.step_forward()
+
+        self.draw()
+        self._slider_current_position = target_position
 
     def draw(self):
-
         self._canvas.delete("all")
         state = self._execution.environment.heap
 
         if 'lines' in state:
             for line in state['lines']:
                 self._canvas.create_line(
-                    line[0][0], 
-                    line[0][1], 
-                    line[1][0], 
-                    line[1][1], 
-                    fill=line[2], 
+                    line[0][0],
+                    line[0][1],
+                    line[1][0],
+                    line[1][1],
+                    fill=line[2],
                     width=4
                 )
+
 
 Minilogo().mainloop()

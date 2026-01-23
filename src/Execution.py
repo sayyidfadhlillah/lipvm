@@ -1,14 +1,10 @@
-from .Environment import Environment
-from .Bytecode import Bytecode
-from .Stack import Stack
-
-from .instructions.Snapshot import Snapshot
+from instructions.AbstractInstruction import AbstractInstruction
 
 from copy import deepcopy
 
 class Execution:
 
-    def __init__(self, bytecode, environment):
+    def __init__(self, bytecode, environment, runtime_mode=True):
         self._history = []
         self._interrupt = False
 
@@ -16,7 +12,12 @@ class Execution:
         self._environment = environment
 
         self._initial_environment = environment
-   
+        self._runtime_mode = runtime_mode
+
+    def is_runtime_mode(self):
+
+        return self._runtime_mode
+
     def started(self):
         return self._environment.ip > 0
 
@@ -28,9 +29,10 @@ class Execution:
         self._environment = self._initial_environment
 
     def start(self):
+
         while not (self._interrupt or self.ended()):
+
             self.step_forward()
-        self._interrupt = False
 
     def stop(self):
         if self.started():
@@ -38,20 +40,30 @@ class Execution:
         else:
             raise Exception("Trying to stop a non-running execution")
 
+    # Execute instruction in the bytecode one step at a time
+    # Each step is limited by a Snapshot instruction
     def step_forward(self):
+
         if self.ended():
             raise Exception("Cannot step forward an execution that has ended")
 
-        instruction = self._bytecode.instructions[self._environment.ip]
-        
-        if type(instruction) is Snapshot:
-            self._history.append(deepcopy(self._environment))
-        else:
+        instruction_needs_a_snapshot: bool = False
+
+        while not (self._interrupt or self.ended() or instruction_needs_a_snapshot):
+
+            instruction: AbstractInstruction = self._bytecode.instructions[self._environment.ip]
+            instruction_needs_a_snapshot = instruction.need_to_have_snapshot()
+
+            if instruction_needs_a_snapshot:
+
+                self._history.append(deepcopy(self._environment))
+
             instruction.execute(self._environment)
-        
-        self._environment.ip += 1
+
+            self._environment.ip += 1
 
     def step_backward(self):
+
         if self._environment.ip == 0:
             raise Exception("Cannot step backward beyond the start of an execution")
 

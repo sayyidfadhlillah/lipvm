@@ -1,7 +1,14 @@
-class Move:
+from instructions.AbstractInstruction import AbstractInstruction
+
+
+class Move(AbstractInstruction):
 
     def __str__(self):
         return 'Move'
+
+    def need_to_have_snapshot(self):
+
+        return True
 
     def execute(self, environment):
         position = (environment.stack.pop(), environment.stack.pop())
