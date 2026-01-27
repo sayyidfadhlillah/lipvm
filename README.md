@@ -2,13 +2,22 @@
 
 ## Import the project
 
-**Step 1:** create a Python virtual environment
+
+**Step 1:** install **uv** the Python package and project manager. 
+
+On unix system use the following command:  
+```shell
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+Refer to [UV's documentation](https://docs.astral.sh) for more information.  
+
+**Step 2:** create a Python virtual environment
 
 ```shell
-python3 -m venv .venv
+uv venv
 ```
 
-**Step 2:** activate the virtual environment
+**Step 3:** activate the virtual environment
 
 On Unix systems:
 ```shell
@@ -21,25 +30,31 @@ On Windows:
 .venv\Scripts\activate
 ```
 
+**Step 4:** pull project's dependencies
+
+```shell
+uv sync
+```
+
 ## Generate parser and visitor for a language
 
 **Requirements:**
 
-- An ANTLR4 grammar file, e.g. `src/languages/Minilogo/syntax/Language.g4`.
+- An ANTLR4 grammar file, e.g. `languages/Minilogo/syntax/Language.g4`.
   - For now the grammar must be named: **Language**.
   - The root parsing rule must be named **start**. 
 - A Java installation, version 21 or superior.
 - The `antlr-4.13.2-complete.jar` from https://www.antlr.org/download.html.
 
 ```shell
-java -jar antlr-4.13.2-complete.jar -Dlanguage=Python3 src/languages/Minilogo/syntax/Language.g4 -no-listener -visitor
+java -jar antlr-4.13.2-complete.jar -Dlanguage=Python3 languages/Minilogo/syntax/Language.g4 -no-listener -visitor
 ```
 
-Upon the execution of this command, an AST visitor is generated: see `src/languages/Minilogo/syntax/LanguageVisitor.py`.  
+Upon the execution of this command, an AST visitor is generated: see `languages/Minilogo/syntax/LanguageVisitor.py`.  
 
 ## Specify the semantic of a language
 
-Based on the generated visitor, create a `Compiler` class in the directory of your language: see `src/languages/Minilogo/Compiler.py`.
+Based on the generated visitor, create a `Compiler` class in the directory of your language: see `languages/Minilogo/Compiler.py`.
 
 This class is expected to implement a `def compile(self, code)` method returning an instance of `Bytecode` (see at the root of the project).  
 
@@ -57,7 +72,7 @@ The method parameters represent:
 To start the currently implemented LipVM with Minilogo, execute the following command:
 
 ```shell
-python -m src.languages.minilogo.ide.Minilogo
+python -m languages.minilogo.ide.Minilogo
 ```
 
 ## Debug
@@ -65,7 +80,7 @@ python -m src.languages.minilogo.ide.Minilogo
 To debug, for now I use `debugpy` using the following command taking `file.logo` (a logo code file) in argument:
 
 ```shell
-python -m debugpy --wait-for-client --listen 5678 LipVM.py file.logo
+python -m debugpy --wait-for-client --listen 5678 backend/LipVM.py file.logo
 ```
 
 Using VSCode you can use the following `launch.json` configuration to connect to the debugging session:
