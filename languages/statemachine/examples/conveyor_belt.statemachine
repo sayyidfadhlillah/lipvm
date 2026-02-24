@@ -1,0 +1,87 @@
+statemachine TrafficLight
+
+events
+    start
+    stop
+    pause
+    reset
+    error
+
+initialState StoppedState
+
+state StoppedState
+
+    start => RunningState
+    reset => ResetState
+
+    activate: {
+        print("Reached Stopped State")
+    }
+
+    tick: {
+
+    }
+
+end
+
+state ResetState
+
+    stop => StopState
+
+    activate: {
+        clear_boxes()
+        send_event(stop)
+    }
+
+    tick: {
+
+    }
+
+end
+
+state RunningState
+
+    stop => StoppedState
+    pause => PausedState
+    error => ErrorState
+
+    activate: {
+        clear_boxes()
+    }
+
+    tick: {
+        base_speed = 5
+        advance_boxes(base_speed)
+        if(has_any_collision){
+            send_event(error)
+        }
+    }
+end
+
+state PausedState
+    start => RunningState
+    stop => StoppedState
+
+    activate: {
+        print("Reached Paused State")
+    }
+
+    tick: {
+
+    }
+
+end
+
+state ErrorState
+
+    reset => ResetState
+
+    activate: {
+        print("Reached Error State")
+    }
+
+    tick: {
+
+    }
+end
+
