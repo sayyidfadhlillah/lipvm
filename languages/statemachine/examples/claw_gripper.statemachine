@@ -15,7 +15,7 @@ initialState StoppedState
 
 state StoppedState
 
-    start => RunningState
+    start => ResetState
     reset => ResetState
 
     activate: {
@@ -74,7 +74,7 @@ state IdleState
     reset => ResetState
 
     activate: {
-        print("Reached LowerToPick State")
+        print("Reached IdleState State")
     }
 
     tick: {
@@ -207,7 +207,7 @@ state LowerToDropState
         
         if(is_arm_fully_extended){
 
-            is_box_released_already = cgripper_driver.release_box()
+            is_box_released_already = cgripper_driver.drop_box()
             if(!is_box_released_already){
                 send_event(auto_secondary)
             }
