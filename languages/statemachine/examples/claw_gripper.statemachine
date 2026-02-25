@@ -1,0 +1,258 @@
+statemachine ConveyorBelt
+
+// event with prefix auto only executed through 
+// function. Cannot be used manually
+events
+    start
+    stop
+    pause
+    reset
+    error
+    auto_primary
+    auto_secondary
+
+initialState StoppedState
+
+state StoppedState
+
+    start => RunningState
+    reset => ResetState
+
+    activate: {
+        print("Reached Stopped State")
+    }
+
+    tick: {
+        
+    }
+
+end
+
+state ResetState
+
+    auto_primary => IdleState
+
+    activate: {
+        print("Reached Reset State")
+    }
+
+    tick: {
+        
+        is_fully_retracted = cgripper_driver.retract_arm()
+        is_reached_home_pos = cgripper_driver.move_to_start()
+
+        if(is_fully_retracted && is_reached_home_pos){
+            cgripper_driver.release_box()
+            send_event(auto_primary)
+        }
+    }
+
+end
+
+state PausedState
+
+    stop => StoppedState 
+    reset => ResetState
+
+    activate: {
+        print("Reached Paused State")
+        state_to_be_resumed = cgripper_driver.get_last_state()
+        set_transition(start, state_to_be_resumed)
+    }
+
+    tick: {
+
+    }
+
+end
+
+state IdleState
+
+    auto_primary => LowerToPickState
+    stop => StoppedState
+    pause => PausedState
+    reset => ResetState
+
+    activate: {
+        print("Reached LowerToPick State")
+    }
+
+    tick: {
+        
+        detect_box_to_be_picked = cgripper_driver.detect_box_to_pick()
+
+        if(detect_box_to_be_picked){
+            send_event(auto_primary)
+        }
+    }
+end
+
+state LowerToPickState
+
+    auto_primary => LiftWithBoxState
+    auto_secondary => LiftAfterAbortState
+    stop => StoppedState
+    pause => PausedState
+    reset => ResetState
+
+    activate: {
+        print("Reached LowerToPick State")
+    }
+
+    tick: {
+        
+        is_arm_fully_extended = cgripper_driver.extend_arm()
+        
+        if(is_arm_fully_extended){
+
+            is_box_gripped_already = cgripper_driver.grip_box()
+            if(!is_box_gripped_already){
+                send_event(auto_secondary)
+            }
+
+            send_event(auto_primary)
+        }
+    }
+end
+
+state LiftAfterAbortState
+    
+    auto_primary => ReturnToStartState
+    stop => StoppedState
+    pause => PausedState
+    reset => ResetState
+
+    activate: {
+        print("Reached LiftAfterAbort State")
+    }
+
+    tick: {
+        is_fully_retracted = cgripper_driver.retract_arm()
+        if(is_fully_retracted){
+            send_event(auto_primary)
+        }
+    }
+end
+
+state ReturnToStartState
+
+    auto_primary => IdleState
+    stop => StoppedState
+    pause => PausedState
+    reset => ResetState
+
+    activate: {
+        print("Reached ReturnToStart State")
+    }
+
+    tick: {
+        is_reached_home_pos = cgripper_driver.move_to_start()
+        if(is_reached_home_pos){
+            send_event(auto_primary)
+        }
+    }
+
+end
+
+state LiftWithBoxState
+    auto_primary => MoveToDropState
+    stop => StoppedState
+    pause => PausedState
+    reset => ResetState
+
+    activate: {
+        print("Reached LiftWithBox State")
+    }
+
+    tick: {
+        is_fully_retracted = cgripper_driver.retract_arm()
+        if(is_fully_retracted){
+            send_event(auto_primary)
+        }
+    }
+end
+
+state MoveToDropState
+    auto_primary => LowerToDropState
+    stop => StoppedState
+    pause => PausedState
+    reset => ResetState
+
+    activate: {
+        print("Reached MoveToDrop State")
+    }
+
+    tick: {
+        is_reaching_drop_point = cgripper_driver.move_to_end()
+        if(is_reaching_drop_point){
+            send_event(auto_primary)
+        }
+    }
+end
+
+state LowerToDropState
+
+    auto_primary => LiftAfterDropState
+    auto_secondary => LiftAfterAbortState
+    stop => StoppedState
+    pause => PausedState
+    reset => ResetState
+
+    activate: {
+        print("Reached LowerToDropState State")
+    }
+
+    tick: {
+        is_arm_fully_extended = cgripper_driver.extend_arm()
+        
+        if(is_arm_fully_extended){
+
+            is_box_released_already = cgripper_driver.release_box()
+            if(!is_box_released_already){
+                send_event(auto_secondary)
+            }
+            send_event(auto_primary)
+        }
+    }
+
+end
+
+state LiftAfterAbortState
+
+    auto_primary => ReturnToStartState
+    stop => StoppedState
+    pause => PausedState
+    reset => ResetState
+
+    activate: {
+        print("Reached LiftAfterAbort State")
+    }
+
+    tick: {
+        is_fully_retracted = cgripper_driver.retract_arm()
+        if(is_fully_retracted){
+            send_event(auto_primary)
+        }
+    }
+
+end
+
+state LiftAfterDropState
+
+    auto_primary => ReturnToStartState
+    stop => StoppedState
+    pause => PausedState
+    reset => ResetState
+
+    activate: {
+        print("Reached LiftAfterDrop State")
+    }
+
+    tick: {
+        is_fully_retracted = cgripper_driver.retract_arm()
+        if(is_fully_retracted){
+            send_event(auto_primary)
+        }
+    }
+
+end

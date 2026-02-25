@@ -1,4 +1,4 @@
-statemachine TrafficLight
+statemachine ConveyorBelt
 
 events
     start
