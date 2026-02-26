@@ -105,12 +105,12 @@ class ConveyorBeltLipVM:
             return
 
         for box in self.boxes:
-            speed = MovementPhysics.effective_speed(
+            box_speed = MovementPhysics.effective_speed(
                 base_speed=speed,
                 weight_factor=self.weight_factor,
                 weight=box.weight,
             )
-            target_position = box.position + speed * self.dt
+            target_position = box.position + box_speed * self.dt
             box.position = min(target_position, self.end_point)
 
     def has_any_collision(self) -> bool:
