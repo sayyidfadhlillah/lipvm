@@ -1,10 +1,10 @@
 import sys
+from collections import deque
 
 from antlr4 import *
 from backend.interpreter import Interpreter
 
 from languages.statemachine.LanguageParser import LanguageParser
-from languages.statemachine.driver_library.conveyor_belt_lipvm import ConveyorBeltLipVM
 
 
 class State:
@@ -38,6 +38,10 @@ class State:
     @property
     def activation_function(self):
         return self._activation_function
+
+    @property
+    def tick_function(self):
+        return self._tick_function
 
 class Machine:
 
@@ -84,11 +88,99 @@ class LanguageInterpreter(Interpreter):
         # State of execution
         self._environment.sp = -1                # Scope pointer
         self._environment.scopes = [None] * 100  # Closure scopes
-        self._environment.primitives = {}        # Supported primitive functions
+        self._event_queue = deque()
 
         # Primitives
-        self._environment.primitives["print"] = lambda x: print(x)
-        self._belt = ConveyorBeltLipVM("Belt 1", 0.0, 10.0, 0.25, 4.0, 0.2)
+        self._environment.primitives = {}
+        self._install_primitives()
+        self._driver = None
+        self._exposed_driver_methods = {
+            "clear_boxes",
+            "advance_boxes",
+            "has_any_collision",
+            "set_current_state_name",
+        }
+
+    @property
+    def parser(self):
+
+        return self._parser
+
+    def set_driver(self, driver) -> None:
+        self._driver = driver
+
+    def _install_primitives(self) -> None:
+        self._environment.primitives["print"] = lambda *values: print(*values)
+        self._environment.primitives["send_event"] = self.enqueue_event
+
+    def _reset_runtime(self) -> None:
+        self._event_queue.clear()
+        self._halt = False
+        self._environment.machine = None
+        self._environment.current_state = None
+        self._environment.sp = -1
+        self._environment.scopes = [None] * 100
+
+    def _run_context(self, ctx) -> None:
+        if ctx is None or self._halt:
+            return
+        self._interpretation_stack = [self.visit(ctx)]
+        self._interpretation_result = None
+        self._interpretation_steps = []
+        self._interpretation()
+
+    def load_program(self, code: str) -> None:
+        tree = self._parser.parse(code)
+        self._reset_runtime()
+        self._run_context(tree)
+
+    def interpret(self, code: str):
+        self.load_program(code)
+
+    def enqueue_event(self, event_name) -> None:
+        self._event_queue.append(str(event_name))
+
+    def available_events(self) -> list[str]:
+        if self._environment.machine is None:
+            return []
+        return list(self._environment.machine.events)
+
+    def is_program_loaded(self) -> bool:
+        return self._environment.machine is not None and self._environment.current_state is not None
+
+    def current_state_name(self) -> str | None:
+        if self._environment.current_state is None:
+            return None
+        return self._environment.current_state.name
+
+    def pending_events(self) -> list[str]:
+        return list(self._event_queue)
+
+    def tick(self) -> None:
+        if self._halt:
+            return
+        if self._environment.machine is None or self._environment.current_state is None:
+            return
+
+        current_state = self._environment.current_state
+        if current_state.tick_function is not None:
+            self._run_context(current_state.tick_function)
+
+        if self._event_queue:
+            self._handle_event(self._event_queue.popleft())
+
+    def _handle_event(self, event_name: str) -> None:
+        if self.error_exist(event_name):
+            return
+
+        target = self._environment.current_state.transitions[event_name]
+        self._environment.current_state = self._environment.machine.states[target]
+
+        if self._driver is not None:
+            self._driver.set_current_state_name(self._environment.current_state.name)
+
+        if self._environment.current_state.activation_function is not None:
+            self._run_context(self._environment.current_state.activation_function)
 
     def visitMachine(self, ctx:LanguageParser.MachineContext):
         self._environment.machine = Machine(ctx.ID().getText())
@@ -134,21 +226,42 @@ class LanguageInterpreter(Interpreter):
 
     def visitDriver_call(self, ctx:LanguageParser.Driver_callContext):
 
-        driver_name = ctx.driverName
         function_to_call = ctx.driverCall.ID().getText()
-        arguments = yield self.visit(ctx.driverCall.arguments())
-        self._belt[function_to_call](*arguments)
+        arguments_node = ctx.driverCall.arguments()
+        arguments = [] if arguments_node is None else (yield self.visit(arguments_node))
+        if self._driver is None:
+            raise Exception("No simulator driver is bound to the interpreter")
+        if function_to_call not in self._exposed_driver_methods:
+            raise Exception("Unsupported simulator driver method: " + function_to_call)
+
+        driver_method = getattr(self._driver, function_to_call, None)
+        if driver_method is None:
+            raise Exception("Simulator driver has no method: " + function_to_call)
+        yield driver_method(*arguments)
 
     def visitVariable(self, ctx: LanguageParser.VariableContext):
-        if not ctx.ID().getText() in self._environment.scopes[self._environment.sp]:
-            raise Exception("Undefined variable: " + str(ctx.ID().getText()))
-        yield self._environment.scopes[self._environment.sp][ctx.ID().getText()]
+        variable_name = ctx.ID().getText()
+        current_scope = self._environment.scopes[self._environment.sp]
+        if current_scope is not None and variable_name in current_scope:
+            yield current_scope[variable_name]
+            return
+
+        if self._environment.machine is not None and variable_name in self._environment.machine.events:
+            # Allow `send_event(start)` style event identifiers.
+            yield variable_name
+            return
+
+        raise Exception("Undefined variable: " + str(variable_name))
 
     def visitLiteral(self, ctx: LanguageParser.LiteralContext):
         if ctx.variable() is not None:
             yield self.visit(ctx.variable())
         elif ctx.STRING() is not None:
             yield ctx.STRING().getText()
+        elif ctx.TRUE() is not None:
+            yield True
+        elif ctx.FALSE() is not None:
+            yield False
         else:
             yield int(ctx.NUMBER().getText())
 
@@ -174,6 +287,9 @@ class LanguageInterpreter(Interpreter):
         elif ctx.expression(0) is not None:
             yield self.visit(ctx.expression(0))
 
+        elif ctx.driver_call() is not None:
+            yield self.visit(ctx.driver_call())
+
         else:
             raise Exception("Unrecognized expression: " + str(ctx))
 
@@ -190,7 +306,8 @@ class LanguageInterpreter(Interpreter):
 
         # Get the function from the supported ones
         function = self._environment.primitives[ctx.ID().getText()]
-        arguments = yield self.visit(ctx.arguments())
+        arguments_node = ctx.arguments()
+        arguments = [] if arguments_node is None else (yield self.visit(arguments_node))
 
         # Execute the function
         function(*arguments)
@@ -230,25 +347,20 @@ class LanguageInterpreter(Interpreter):
         self._environment.scopes[self._environment.sp] = {}
         yield self.visitChildren(ctx)
 
+        if self._environment.machine is None:
+            raise Exception("No state machine has been declared")
         if self._environment.machine.initial_state not in self._environment.machine.states:
             raise Exception("Initial state " + self._environment.machine.initial_state + " not defined")
-
-        command = input("Enter an event " + str(self._environment.machine.events) + " or terminate: ")
         self._environment.current_state = self._environment.machine.states[self._environment.machine.initial_state]
-        while command != "terminate":
-
-            is_error_occured = self.error_exist(command)
-
-            if not is_error_occured:
-
-                target = self._environment.current_state.transitions[command]
-                self._environment.current_state = self._environment.machine.states[target]
-                if self._environment.current_state.activation_function is not None:
-                    yield self.visit(self._environment.current_state.activation_function)
-
-            command = input("Enter an event " + str(self._environment.machine.events) + " or terminate: ")
+        if self._driver is not None:
+            self._driver.set_current_state_name(self._environment.current_state.name)
+        if self._environment.current_state.activation_function is not None:
+            yield self.visit(self._environment.current_state.activation_function)
 
     def error_exist(self, command: str):
+        if self._environment.machine is None or self._environment.current_state is None:
+            print("Machine is not initialized", file=sys.stderr)
+            return True
 
         if command not in self._environment.machine.events:
             print("Unrecognized event: " + str(command), file=sys.stderr)

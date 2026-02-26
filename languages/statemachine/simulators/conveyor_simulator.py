@@ -1,10 +1,29 @@
 from __future__ import annotations
 
+import sys
 import tkinter as tk
 from tkinter import messagebox
 
+from backend.LipVM import LipVM
 from languages.statemachine.driver_library.conveyor_belt_lipvm import ConveyorBeltLipVM
 from languages.statemachine.driver_library.factory_physics_simulation import Box
+
+
+class ConveyorSimulatorDriver:
+    def __init__(self, app: "ConveyorSimulatorApp") -> None:
+        self._app = app
+
+    def clear_boxes(self) -> None:
+        self._app.clear_boxes()
+
+    def advance_boxes(self, base_speed: float | None = None) -> None:
+        self._app.advance_boxes(base_speed)
+
+    def has_any_collision(self) -> bool:
+        return self._app.has_any_collision()
+
+    def set_current_state_name(self, new_state_name: str) -> None:
+        self._app.set_current_state_name(new_state_name)
 
 
 # ============================
@@ -15,11 +34,18 @@ class ConveyorSimulatorApp:
         self.root = root
         root.title("One Conveyor Belt (Delivered Counter)")
 
+        #LipVM Definition
+        self._vm = LipVM("languages.statemachine")
+        self._sim_driver = ConveyorSimulatorDriver(self)
+        self._vm.interpreter.set_driver(self._sim_driver)
+
         # Timing
         self.dt = 0.02
         self._job: str | None = None
+        self._vm_job: str | None = None
         self._advance_job: str | None = None
         self._advance_pressed = False
+        self._editor_job: str | None = None
 
         # Model
         self.belt: ConveyorBeltLipVM = ConveyorBeltLipVM("Belt 1", 0.0, 10.0, 0.25, 4.0, self.dt)
@@ -31,12 +57,21 @@ class ConveyorSimulatorApp:
         # UI Vars
         self.spawn_weight_var = tk.StringVar(value=f"{self.default_box_weight:.1f}")
         self.spawn_width_var = tk.StringVar(value=f"{self.default_box_width:.1f}")
+        self.event_name_var = tk.StringVar()
+        self.program_status_var = tk.StringVar(value="Program: not loaded")
+        self.vm_debug_var = tk.StringVar(value="VM State: N/A | Pending events: 0")
 
         # Canvas
         self.canvas_w = 950
         self.canvas_h = 330
         self.canvas = tk.Canvas(root, width=self.canvas_w, height=self.canvas_h, bg="white")
-        self.canvas.grid(row=0, column=0, columnspan=5, padx=10, pady=10, sticky="nsew")
+        self.canvas.grid(row=0, column=1, columnspan=5, padx=10, pady=10, sticky="nsew")
+
+        # Text editor (left side)
+        self.editor = tk.Text(root, width=36, wrap="word")
+        self.editor.grid(row=0, column=0, rowspan=6, padx=(10, 0), pady=10, sticky="nsew")
+        self.editor.bind("<<Modified>>", self.on_editor_modified)
+        self.editor.edit_modified(False)
 
         # Buttons
         self.btn_clear = tk.Button(root, text="Clear Boxes", width=14, command=self.clear_boxes)
@@ -46,33 +81,44 @@ class ConveyorSimulatorApp:
         self.btn_advance.bind("<ButtonRelease-1>", self.on_advance_release)
 
         # Layout buttons
-        self.btn_clear.grid(row=1, column=2, padx=6, pady=4, sticky="w")
-        self.btn_advance.grid(row=1, column=3, padx=6, pady=4, sticky="w")
-        self.btn_spawn.grid(row=1, column=4, padx=6, pady=4, sticky="w")
+        self.btn_clear.grid(row=1, column=3, padx=6, pady=4, sticky="w")
+        self.btn_advance.grid(row=1, column=4, padx=6, pady=4, sticky="w")
+        self.btn_spawn.grid(row=1, column=5, padx=6, pady=4, sticky="w")
 
         # Spawn inputs
         self.spawn_weight_label = tk.Label(root, text="New box weight (before spawn):")
         self.spawn_weight_entry = tk.Entry(root, textvariable=self.spawn_weight_var, width=10)
         self.spawn_width_label = tk.Label(root, text="New box width (before spawn):")
         self.spawn_width_entry = tk.Entry(root, textvariable=self.spawn_width_var, width=10)
+        self.event_name_label = tk.Label(root, text="Event:")
+        self.event_name_entry = tk.Entry(root, textvariable=self.event_name_var, width=12)
+        self.btn_send_event = tk.Button(root, text="Send Event", width=12, command=self.on_send_event)
 
-        self.spawn_weight_label.grid(row=2, column=0, padx=(10, 4), pady=(6, 10), sticky="e")
-        self.spawn_weight_entry.grid(row=2, column=1, padx=(0, 10), pady=(6, 10), sticky="w")
-        self.spawn_width_label.grid(row=3, column=0, padx=(10, 4), pady=(0, 10), sticky="e")
-        self.spawn_width_entry.grid(row=3, column=1, padx=(0, 10), pady=(0, 10), sticky="w")
+        self.spawn_weight_label.grid(row=2, column=1, padx=(10, 4), pady=(6, 10), sticky="e")
+        self.spawn_weight_entry.grid(row=2, column=2, padx=(0, 10), pady=(6, 10), sticky="w")
+        self.event_name_label.grid(row=2, column=3, padx=(10, 4), pady=(6, 10), sticky="e")
+        self.event_name_entry.grid(row=2, column=4, padx=(0, 10), pady=(6, 10), sticky="w")
+        self.btn_send_event.grid(row=2, column=5, padx=(0, 10), pady=(6, 10), sticky="w")
+        self.spawn_width_label.grid(row=3, column=1, padx=(10, 4), pady=(0, 10), sticky="e")
+        self.spawn_width_entry.grid(row=3, column=2, padx=(0, 10), pady=(0, 10), sticky="w")
 
         # Delivered label (requested attribute)
         self.delivered_var = tk.StringVar()
         self.delivered_label = tk.Label(root, textvariable=self.delivered_var, anchor="w", justify="left")
-        self.delivered_label.grid(row=4, column=0, columnspan=5, padx=10, pady=(0, 2), sticky="we")
+        self.delivered_label.grid(row=4, column=1, columnspan=5, padx=10, pady=(0, 2), sticky="we")
 
         # Info label
         self.info_var = tk.StringVar()
         self.info_label = tk.Label(root, textvariable=self.info_var, anchor="w", justify="left")
-        self.info_label.grid(row=5, column=0, columnspan=5, padx=10, pady=(0, 10), sticky="we")
+        self.info_label.grid(row=5, column=1, columnspan=5, padx=10, pady=(0, 10), sticky="we")
+        self.program_status_label = tk.Label(root, textvariable=self.program_status_var, anchor="w", justify="left", fg="#666666")
+        self.program_status_label.grid(row=6, column=0, padx=(10, 0), pady=(0, 10), sticky="we")
+        self.vm_debug_label = tk.Label(root, textvariable=self.vm_debug_var, anchor="w", justify="left")
+        self.vm_debug_label.grid(row=6, column=1, columnspan=5, padx=10, pady=(0, 10), sticky="we")
 
         # Resizing
-        for c in range(5):
+        root.grid_columnconfigure(0, weight=2)
+        for c in range(1, 6):
             root.grid_columnconfigure(c, weight=1)
         root.grid_rowconfigure(0, weight=1)
 
@@ -87,15 +133,25 @@ class ConveyorSimulatorApp:
 
         self.draw()
         self.ensure_loop_running()
+        self.ensure_vm_loop_running()
         root.protocol("WM_DELETE_WINDOW", self.on_close)
 
-    # ---------- Buttons ----------
+    # Exposed methods
     def clear_boxes(self) -> None:
         self.belt.clear_boxes()
 
-    def advance_boxes(self) -> None:
-        self.belt.advance_boxes(self.belt.base_speed)
+    def advance_boxes(self, base_speed: float | None = None) -> None:
+        speed = self.belt.base_speed if base_speed is None else float(base_speed)
+        self.belt.advance_boxes(speed)
         self.consume_delivered_boxes()
+
+    def has_any_collision(self) -> bool:
+        return self.belt.has_any_collision()
+
+    def set_current_state_name(self, new_state_name: str):
+        self.belt.state_name = new_state_name
+
+    # End of exposed methods
 
     def on_advance_press(self, _event: tk.Event) -> None:
         self._advance_pressed = True
@@ -112,9 +168,35 @@ class ConveyorSimulatorApp:
                 pass
             self._advance_job = None
 
-    def set_current_state_name(self, new_state_name: str):
+    def on_editor_modified(self, _event: tk.Event) -> None:
+        if not self.editor.edit_modified():
+            return
+        self.editor.edit_modified(False)
+        if self._editor_job is not None:
+            try:
+                self.root.after_cancel(self._editor_job)
+            except tk.TclError:
+                pass
+        self._editor_job = self.root.after(200, self.on_editor_text_changed)
 
-        self.belt.state_name = new_state_name
+    def get_editor_code(self) -> str:
+        return self.editor.get("1.0", "end-1c")
+
+    def on_editor_text_changed(self) -> None:
+        self._editor_job = None
+        code = self.get_editor_code().strip()
+        if not code:
+            self.set_program_status("Program: empty", "#8a6d3b")
+            return
+
+        parser = self._vm.interpreter.parser
+        try:
+            parser.parse(code)
+            self._vm.interpreter.load_program(code)
+            self.set_program_status("Program: loaded", "#1b5e20")
+        except Exception as exc:
+            self.set_program_status(f"Program: error - {str(exc)}", "#b71c1c")
+            print("Editor execution error:", str(exc), file=sys.stderr)
 
     def on_spawn_box(self) -> None:
         weight = self.get_spawn_weight()
@@ -173,6 +255,46 @@ class ConveyorSimulatorApp:
 
         self.draw()
         self.ensure_loop_running()
+
+    def on_send_event(self) -> None:
+        event_name = self.event_name_var.get().strip()
+        if not event_name:
+            messagebox.showerror("Invalid event", "Please enter an event name.")
+            return
+
+        available_events = self._vm.interpreter.available_events()
+        if not available_events:
+            messagebox.showwarning(
+                "Program not loaded",
+                "Load a valid state machine program in the editor first.",
+            )
+            return
+
+        if event_name not in available_events:
+            messagebox.showerror(
+                "Unknown event",
+                f"'{event_name}' is not defined. Available events: {', '.join(available_events)}",
+            )
+            return
+
+        self._vm.interpreter.enqueue_event(event_name)
+        self.event_name_var.set("")
+
+    def set_program_status(self, text: str, color: str) -> None:
+        self.program_status_var.set(text)
+        self.program_status_label.configure(fg=color)
+
+    def ensure_vm_loop_running(self) -> None:
+        if self._vm_job is None:
+            self._vm_job = self.root.after(int(self.dt * 1000), self.vm_loop)
+
+    def vm_loop(self) -> None:
+        self._vm_job = None
+        try:
+            self._vm.interpreter.tick()
+        except Exception as exc:
+            print("VM tick error:", str(exc), file=sys.stderr)
+        self.ensure_vm_loop_running()
 
     def ensure_advance_loop_running(self) -> None:
         if self._advance_job is None:
@@ -256,6 +378,16 @@ class ConveyorSimulatorApp:
         self.info_var.set(
             "Rule: effective_speed = base_speed / (1 + weight_factor * weight)"
         )
+        state_name = self._vm.interpreter.current_state_name() or "N/A"
+        pending_events = self._vm.interpreter.pending_events()
+        preview_items = pending_events[:5]
+        preview = ", ".join(preview_items)
+        if len(pending_events) > 5:
+            preview += ", ..."
+        pending_text = f"{len(pending_events)}"
+        if preview:
+            pending_text += f" [{preview}]"
+        self.vm_debug_var.set(f"VM State: {state_name} | Pending events: {pending_text}")
 
     def model_to_canvas_x(self, belt: ConveyorBeltLipVM, position: float, left: float, right: float) -> float:
         t = (position - belt.start_point) / (belt.end_point - belt.start_point)
@@ -270,6 +402,18 @@ class ConveyorSimulatorApp:
 
     # ---------- Shutdown ----------
     def on_close(self) -> None:
+        if self._editor_job is not None:
+            try:
+                self.root.after_cancel(self._editor_job)
+            except tk.TclError:
+                pass
+            self._editor_job = None
+        if self._vm_job is not None:
+            try:
+                self.root.after_cancel(self._vm_job)
+            except tk.TclError:
+                pass
+            self._vm_job = None
         if self._advance_job is not None:
             try:
                 self.root.after_cancel(self._advance_job)
