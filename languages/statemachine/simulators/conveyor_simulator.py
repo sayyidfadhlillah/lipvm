@@ -18,6 +18,8 @@ class ConveyorSimulatorApp:
         # Timing
         self.dt = 0.02
         self._job: str | None = None
+        self._advance_job: str | None = None
+        self._advance_pressed = False
 
         # Model
         self.belt: ConveyorBeltLipVM = ConveyorBeltLipVM("Belt 1", 0.0, 10.0, 0.25, 4.0, self.dt)
@@ -37,17 +39,15 @@ class ConveyorSimulatorApp:
         self.canvas.grid(row=0, column=0, columnspan=5, padx=10, pady=10, sticky="nsew")
 
         # Buttons
-        self.btn_start = tk.Button(root, text="Start Belt", width=14, command=self.on_start)
-        self.btn_pause = tk.Button(root, text="Pause Belt", width=14, command=self.on_pause)
-        self.btn_stop = tk.Button(root, text="Stop Belt", width=14, command=self.on_stop)
-        self.btn_reset = tk.Button(root, text="Reset Belt", width=14, command=self.on_reset)
+        self.btn_clear = tk.Button(root, text="Clear Boxes", width=14, command=self.clear_boxes)
+        self.btn_advance = tk.Button(root, text="Advance Boxes", width=14)
         self.btn_spawn = tk.Button(root, text="Spawn New Box", width=16, command=self.on_spawn_box)
+        self.btn_advance.bind("<ButtonPress-1>", self.on_advance_press)
+        self.btn_advance.bind("<ButtonRelease-1>", self.on_advance_release)
 
         # Layout buttons
-        self.btn_start.grid(row=1, column=0, padx=6, pady=4, sticky="w")
-        self.btn_pause.grid(row=1, column=1, padx=6, pady=4, sticky="w")
-        self.btn_stop.grid(row=1, column=2, padx=6, pady=4, sticky="w")
-        self.btn_reset.grid(row=1, column=3, padx=6, pady=4, sticky="w")
+        self.btn_clear.grid(row=1, column=2, padx=6, pady=4, sticky="w")
+        self.btn_advance.grid(row=1, column=3, padx=6, pady=4, sticky="w")
         self.btn_spawn.grid(row=1, column=4, padx=6, pady=4, sticky="w")
 
         # Spawn inputs
@@ -86,26 +86,31 @@ class ConveyorSimulatorApp:
         self.min_box_width_px = 10
 
         self.draw()
+        self.ensure_loop_running()
         root.protocol("WM_DELETE_WINDOW", self.on_close)
 
     # ---------- Buttons ----------
-    def on_start(self) -> None:
-        self.belt.start()
-        self.ensure_loop_running()
-        self.draw()
+    def clear_boxes(self) -> None:
+        self.belt.clear_boxes()
 
-    def on_pause(self) -> None:
-        self.belt.pause()
-        self.draw()
+    def advance_boxes(self) -> None:
+        self.belt.advance_boxes(self.belt.base_speed)
+        self.consume_delivered_boxes()
 
-    def on_stop(self) -> None:
-        self.belt.stop()
-        self.draw()
+    def on_advance_press(self, _event: tk.Event) -> None:
+        self._advance_pressed = True
+        # A quick click still performs one step immediately.
+        self.advance_boxes()
+        self.ensure_advance_loop_running()
 
-    def on_reset(self) -> None:
-        self.belt.reset()
-        self.ensure_loop_running()
-        self.draw()
+    def on_advance_release(self, _event: tk.Event) -> None:
+        self._advance_pressed = False
+        if self._advance_job is not None:
+            try:
+                self.root.after_cancel(self._advance_job)
+            except tk.TclError:
+                pass
+            self._advance_job = None
 
     def on_spawn_box(self) -> None:
         weight = self.get_spawn_weight()
@@ -162,13 +167,19 @@ class ConveyorSimulatorApp:
     def loop(self) -> None:
         self._job = None
 
-        self.belt.tick()
-        self.consume_delivered_boxes()
-
         self.draw()
+        self.ensure_loop_running()
 
-        if self.belt.state_name == "RUNNING":
-            self.ensure_loop_running()
+    def ensure_advance_loop_running(self) -> None:
+        if self._advance_job is None:
+            self._advance_job = self.root.after(int(self.dt * 1000), self.advance_loop)
+
+    def advance_loop(self) -> None:
+        self._advance_job = None
+        if not self._advance_pressed:
+            return
+        self.advance_boxes()
+        self.ensure_advance_loop_running()
 
     def consume_delivered_boxes(self) -> None:
         while self.belt.pop_box_at_end() is not None:
@@ -255,6 +266,12 @@ class ConveyorSimulatorApp:
 
     # ---------- Shutdown ----------
     def on_close(self) -> None:
+        if self._advance_job is not None:
+            try:
+                self.root.after_cancel(self._advance_job)
+            except tk.TclError:
+                pass
+            self._advance_job = None
         if self._job is not None:
             try:
                 self.root.after_cancel(self._job)

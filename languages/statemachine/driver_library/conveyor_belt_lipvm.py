@@ -29,16 +29,16 @@ class ConveyorBeltLipVM:
         self.end_point = float(end_point)
         self.base_speed = float(base_speed)
         self.weight_factor = float(weight_factor)
-
+        self._state_name = "Placeholder"
         self.boxes: list[Box] = []
 
     @property
     def state_name(self) -> str:
-        return self._state.name
+        return self._state_name
 
-    def clear_boxes(self):
-
-        self.boxes.clear()
+    @state_name.setter
+    def state_name(self, value: str) -> None:
+        self._state_name = value
 
     def can_accept_new_box(self, new_box: Box) -> bool:
 
@@ -95,6 +95,10 @@ class ConveyorBeltLipVM:
             return None
         return self.boxes.pop(-1)
 
+    def clear_boxes(self):
+
+        self.boxes.clear()
+
     def advance_boxes(self, speed: float) -> None:
 
         if not self.boxes:
@@ -108,11 +112,6 @@ class ConveyorBeltLipVM:
             )
             target_position = box.position + speed * self.dt
             box.position = min(target_position, self.end_point)
-
-        self.boxes.sort(key=lambda b: b.position)
-
-        if self.has_any_collision():
-            self.set_error()
 
     def has_any_collision(self) -> bool:
 
@@ -130,19 +129,3 @@ class ConveyorBeltLipVM:
                 return True
 
         return False
-
-    def reset(self) -> None:
-        self._state.reset(self)
-
-    def start(self) -> None:
-        self._state.start(self)
-
-    def stop(self) -> None:
-        self._state.stop(self)
-
-    def pause(self) -> None:
-        self._state.pause(self)
-
-    def tick(self) -> None:
-
-        self._state.tick(self)

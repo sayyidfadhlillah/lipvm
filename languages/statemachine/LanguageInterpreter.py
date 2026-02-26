@@ -1,7 +1,9 @@
+import sys
+
 from antlr4 import *
 from backend.interpreter import Interpreter
 
-from languages.statemachine.simulators.LanguageParser import LanguageParser
+from languages.statemachine.LanguageParser import LanguageParser
 from languages.statemachine.driver_library.conveyor_belt_lipvm import ConveyorBeltLipVM
 
 
@@ -11,6 +13,7 @@ class State:
         self._name = name
         self._transitions = {}
         self._activation_function = None
+        self._tick_function = None
 
     def __str__(self):
         return self._name
@@ -20,6 +23,9 @@ class State:
 
     def add_activation_function(self, body):
         self._activation_function = body
+
+    def add_tick_function(self, body):
+        self._tick_function = body
 
     @property
     def name(self):
@@ -101,7 +107,9 @@ class LanguageInterpreter(Interpreter):
         for transition in ctx.transition():
             tr = yield self.visit(transition)
             state.add_transition(tr[0], tr[1])
-        state.add_activation_function(ctx.function())
+
+        state.add_activation_function(ctx.activate())
+        state.add_tick_function(ctx.tick())
 
     def visitTransition(self, ctx:LanguageParser.TransitionContext):
         yield ctx.ID(0).getText(), ctx.ID(1).getText()
@@ -225,23 +233,38 @@ class LanguageInterpreter(Interpreter):
         if self._environment.machine.initial_state not in self._environment.machine.states:
             raise Exception("Initial state " + self._environment.machine.initial_state + " not defined")
 
-        command = input("Enter an event " + str(self._environment.machine.events) + " or stop: ")
+        command = input("Enter an event " + str(self._environment.machine.events) + " or terminate: ")
         self._environment.current_state = self._environment.machine.states[self._environment.machine.initial_state]
-        while command != "stop":
-            if command not in self._environment.machine.events:
-                raise Exception("Unrecognized event: " + str(command))
+        while command != "terminate":
 
-            if not command in self._environment.current_state.transitions:
-                raise Exception("Cannot execute transition event \"" + str(command) + "\" from current state: " + str(self._environment.current_state))
+            is_error_occured = self.error_exist(command)
 
-            target = self._environment.current_state.transitions[command]
-            if not target in self._environment.machine.states:
-                raise Exception("Cannot execute transition event " + str(command) + " from as " + target + " does not exist in the machine")
+            if not is_error_occured:
 
-            self._environment.current_state = self._environment.machine.states[target]
-            if self._environment.current_state.activation_function is not None:
-                yield self.visit(self._environment.current_state.activation_function)
+                target = self._environment.current_state.transitions[command]
+                self._environment.current_state = self._environment.machine.states[target]
+                if self._environment.current_state.activation_function is not None:
+                    yield self.visit(self._environment.current_state.activation_function)
 
-            command = input("Enter an event " + str(self._environment.machine.events) + " or stop: ")
+            command = input("Enter an event " + str(self._environment.machine.events) + " or terminate: ")
+
+    def error_exist(self, command: str):
+
+        if command not in self._environment.machine.events:
+            print("Unrecognized event: " + str(command), file=sys.stderr)
+            return True
+
+        if not command in self._environment.current_state.transitions:
+            print("Cannot execute transition event \"" + str(command) + "\" from current state: " +
+                  str(self._environment.current_state), file=sys.stderr)
+            return True
+
+        target = self._environment.current_state.transitions[command]
+        if not target in self._environment.machine.states:
+            print("Cannot execute transition event " + str(command) + " from as " + target +
+                  " does not exist in the machine", file=sys.stderr)
+            return True
+
+        return False
 
 del LanguageParser

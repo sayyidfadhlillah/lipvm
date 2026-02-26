@@ -33,7 +33,7 @@ state ResetState
     }
 
     tick: {
-        belt_driver.clear_boxes()
+        mch_driver.clear_boxes()
         send_event(stop)
     }
 
@@ -51,8 +51,9 @@ state RunningState
 
     tick: {
         base_speed = 5
-        belt_driver.advance_boxes(base_speed)
-        if(belt_driver.has_any_collision()){
+        mch_driver.advance_boxes(base_speed)
+        collision_occured = mch_driver.has_any_collision()
+        if(collision_occured){
             send_event(error)
         }
     }
