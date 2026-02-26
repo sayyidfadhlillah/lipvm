@@ -1,3 +1,5 @@
+import sys
+
 from languages.statemachine.driver_library.factory_physics_simulation import MovementPhysics, Box
 
 # ============================
@@ -38,6 +40,12 @@ class ConveyorBeltLipVM:
 
     @state_name.setter
     def state_name(self, value: str) -> None:
+
+        if len(value.strip()) == 0:
+
+            print('State name cannot be empty', file=sys.stderr)
+            self._state_name = "Placeholder"
+
         self._state_name = value
 
     def can_accept_new_box(self, new_box: Box) -> bool:

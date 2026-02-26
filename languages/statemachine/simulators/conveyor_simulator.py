@@ -112,6 +112,10 @@ class ConveyorSimulatorApp:
                 pass
             self._advance_job = None
 
+    def set_current_state_name(self, new_state_name: str):
+
+        self.belt.state_name = new_state_name
+
     def on_spawn_box(self) -> None:
         weight = self.get_spawn_weight()
         if weight is None:
