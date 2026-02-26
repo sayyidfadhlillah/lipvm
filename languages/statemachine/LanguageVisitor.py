@@ -1,4 +1,4 @@
-# Generated from languages/statemachine/Language.g4 by ANTLR 4.13.2
+# Generated from Language.g4 by ANTLR 4.13.2
 from antlr4 import *
 if "." in __name__:
     from .LanguageParser import LanguageParser
@@ -34,8 +34,18 @@ class LanguageVisitor(ParseTreeVisitor):
         return self.visitChildren(ctx)
 
 
-    # Visit a parse tree produced by LanguageParser#function.
-    def visitFunction(self, ctx:LanguageParser.FunctionContext):
+    # Visit a parse tree produced by LanguageParser#activate.
+    def visitActivate(self, ctx:LanguageParser.ActivateContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by LanguageParser#tick.
+    def visitTick(self, ctx:LanguageParser.TickContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by LanguageParser#conditional.
+    def visitConditional(self, ctx:LanguageParser.ConditionalContext):
         return self.visitChildren(ctx)
 
 
@@ -46,6 +56,11 @@ class LanguageVisitor(ParseTreeVisitor):
 
     # Visit a parse tree produced by LanguageParser#literal.
     def visitLiteral(self, ctx:LanguageParser.LiteralContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by LanguageParser#driver_call.
+    def visitDriver_call(self, ctx:LanguageParser.Driver_callContext):
         return self.visitChildren(ctx)
 
 

@@ -50,14 +50,12 @@ state ResetState
 end
 
 state PausedState
-
+    start => last_state()
     stop => StoppedState 
     reset => ResetState
 
     activate: {
         print("Reached Paused State")
-        state_to_be_resumed = cgripper_driver.get_last_state()
-        set_transition(start, state_to_be_resumed)
     }
 
     tick: {

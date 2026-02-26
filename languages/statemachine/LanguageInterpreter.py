@@ -1,10 +1,9 @@
 from antlr4 import *
-from copy import deepcopy
-
-from backend.annotation import step
 from backend.interpreter import Interpreter
 
-from languages.statemachine.LanguageParser import LanguageParser
+from languages.statemachine.simulators.LanguageParser import LanguageParser
+from languages.statemachine.driver_library.conveyor_belt_lipvm import ConveyorBeltLipVM
+
 
 class State:
 
@@ -83,6 +82,7 @@ class LanguageInterpreter(Interpreter):
 
         # Primitives
         self._environment.primitives["print"] = lambda x: print(x)
+        self._belt = ConveyorBeltLipVM("Belt 1", 0.0, 10.0, 0.25, 4.0, 0.2)
 
     def visitMachine(self, ctx:LanguageParser.MachineContext):
         self._environment.machine = Machine(ctx.ID().getText())
@@ -106,8 +106,30 @@ class LanguageInterpreter(Interpreter):
     def visitTransition(self, ctx:LanguageParser.TransitionContext):
         yield ctx.ID(0).getText(), ctx.ID(1).getText()
 
-    def visitFunction(self, ctx:LanguageParser.FunctionContext):
+    def visitActivate(self, ctx:LanguageParser.ActivateContext):
         yield self.visit(ctx.body())
+
+    def visitTick(self, ctx:LanguageParser.TickContext):
+        yield self.visit(ctx.body())
+
+    def visitConditional(self, ctx:LanguageParser.ConditionalContext):
+
+        condition = yield self.visit(ctx.condition)
+
+        if condition:
+
+            yield self.visit(ctx.then_body)
+
+        elif ctx.else_body is not None:
+
+            yield self.visit(ctx.else_body)
+
+    def visitDriver_call(self, ctx:LanguageParser.Driver_callContext):
+
+        driver_name = ctx.driverName
+        function_to_call = ctx.driverCall.ID().getText()
+        arguments = yield self.visit(ctx.driverCall.arguments())
+        self._belt[function_to_call](*arguments)
 
     def visitVariable(self, ctx: LanguageParser.VariableContext):
         if not ctx.ID().getText() in self._environment.scopes[self._environment.sp]:
@@ -133,6 +155,8 @@ class LanguageInterpreter(Interpreter):
                 case "-": yield left - right
                 case "*": yield left * right
                 case "/": yield left / right
+                case "&&": yield left and right
+                case '||': yield left or right
                 case _:
                     raise Exception("Unknown operator: " + str(ctx.OPERATOR().getText()))
 

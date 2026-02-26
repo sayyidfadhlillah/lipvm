@@ -8,27 +8,33 @@ events: 'events' (name=ID)*;
 
 initial: 'initialState' name=ID;
 
-state: 'state' name=ID transitions=transition* activate=function? 'end';
+state: 'state' name=ID transitions=transition* activate_func=activate? tick_func=tick? 'end';
 
 transition: name=ID '=>' stateName=ID;
 
-function: 'activate:' body;
+activate: 'activate:' body;
+tick: 'tick:' body;
+
+conditional: 'if' LPAREN condition=expression RPAREN then_body=body
+('else' else_body=body)?;
 
 // Expressions
 variable: variableName=ID;
-literal: variable | NUMBER | STRING;
+literal: variable | NUMBER | STRING | TRUE | FALSE;
+driver_call: 'mch_driver.' driverCall=call;
 
 expression:
     leftOperand=expression op=OPERATOR rightOperand=expression
     | literal
-    | LPAREN expression RPAREN;
+    | LPAREN expression RPAREN
+    | driver_call;
 
 // Function definition and call
 arguments: expression (',' expression)*;
 call: functionName=ID LPAREN args=arguments? RPAREN;
 
 halt: 'halt' LPAREN RPAREN;
-body: LCBRACKET (assignment | call | halt | forloop)* RCBRACKET;
+body: LCBRACKET (assignment | call | halt | forloop | conditional | driver_call)* RCBRACKET;
 
 // Variable definition
 assignment: variableName=ID '=' value=expression;
@@ -43,15 +49,18 @@ forloop
 main: machine events initial state*;
 
 // == Define lexer rules ==
-ID : [a-zA-Z][a-zA-Z0-9]*;
+ID : [a-zA-Z][a-zA-Z0-9_]*;
 NUMBER: '-'?[0-9]+;
 STRING : '"' .*? '"' ;
 
-OPERATOR: '+' | '-' | '*' | '/';
+OPERATOR: '+' | '-' | '*' | '/' | '&&' | '||';
 
 LPAREN : '(' ;
 RPAREN : ')' ;
 LCBRACKET: '{';
 RCBRACKET: '}';
+TRUE: 'True';
+FALSE: 'False';
+MCH_DRIVER: 'mch_driver';
 
 WS: [ \t\r\n]+ -> skip;
