@@ -75,7 +75,7 @@ class ConveyorBeltLipVM:
         self.boxes.sort(key=lambda b: b.position)
 
         if self.has_any_collision():
-            self.set_error()
+
             return False
 
         return True
