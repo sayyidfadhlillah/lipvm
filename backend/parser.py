@@ -19,6 +19,12 @@ class Parser:
         tree = parser.main()
 
         if parser.getNumberOfSyntaxErrors() > 0:
-            raise Exception("Syntax errors") # TODO better error management
+            raise ParserException("Syntax errors") # TODO better error management
 
         return tree
+
+class ParserException(Exception):
+
+    def __init__(self, message: str):
+
+        self.value = message

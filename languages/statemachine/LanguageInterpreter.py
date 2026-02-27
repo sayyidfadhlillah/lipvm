@@ -95,11 +95,6 @@ class LanguageInterpreter(Interpreter):
         self._install_primitives()
         self._driver = None
 
-    @property
-    def parser(self):
-
-        return self._parser
-
     def set_driver(self, driver) -> None:
         self._driver = driver
 
@@ -129,7 +124,12 @@ class LanguageInterpreter(Interpreter):
         self._run_context(tree)
 
     def interpret(self, code: str):
-        self.load_program(code)
+
+        super().interpret(code)
+
+        # Method reset_runtime() must not be called if we want to implement Live Modelling at Runtime
+        self._reset_runtime()
+
 
     def enqueue_event(self, event_name) -> None:
         self._event_queue.append(str(event_name))
@@ -223,14 +223,16 @@ class LanguageInterpreter(Interpreter):
         function_to_call = ctx.driverCall.ID().getText()
         arguments_node = ctx.driverCall.arguments()
         arguments = [] if arguments_node is None else (yield self.visit(arguments_node))
+
+        # Check if the JSON-RPC Driver exist
         if self._driver is None:
             raise Exception("No simulator driver is bound to the interpreter")
-        if function_to_call not in self._exposed_driver_methods:
-            raise Exception("Unsupported simulator driver method: " + function_to_call)
 
+        # Check if the method exist in the driver
         driver_method = getattr(self._driver, function_to_call, None)
         if driver_method is None:
             raise Exception("Simulator driver has no method: " + function_to_call)
+
         yield driver_method(*arguments)
 
     def visitVariable(self, ctx: LanguageParser.VariableContext):
