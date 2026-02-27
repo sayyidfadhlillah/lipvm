@@ -10,7 +10,7 @@ from jsonrpclib import Server
 from languages.statemachine.rpc_based_simulators.utility.env_utils import load_env_file
 
 
-class ConveyorJsonRpcClient:
+class SimulationJsonRpcClient:
     """Simple JSON-RPC client for the conveyor simulator server."""
 
     def __init__(self, host: str = "127.0.0.1", port: int = 5001) -> None:
@@ -109,7 +109,7 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = _parse_args()
-    client = ConveyorJsonRpcClient(host=args.host, port=args.port)
+    client = SimulationJsonRpcClient(host=args.host, port=args.port)
 
     if args.command == "state":
         _pretty_print(client.get_state())

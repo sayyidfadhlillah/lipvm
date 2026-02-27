@@ -1,9 +1,12 @@
+import os
 import sys
+from importlib import import_module
 from tkinter import *
 from tkinter import filedialog, messagebox
 
 from backend.LipVM import LipVM
 from backend.parser import ParserException
+from languages.statemachine.LanguageInterpreter import LanguageInterpreter as StateMachineInterpreter
 
 FILETYPES = [
     ("State Machine Models", "*.statemachine"),
@@ -18,13 +21,27 @@ class StateMachineIDE(Tk):
         self.geometry("800x600")
         self._file_path = None
         self._dirty = False
+        self._interval_ms = 200
+        self._interval_job = None
 
         self.components()
         self.layout()
         self.bind_shortcuts()
         self.protocol("WM_DELETE_WINDOW", self.exit_app)
         self._update_title()
+        self.start_interval_loop()
+
+        # JSON RPC Client for Simulation
+        host = os.environ['SIMULATION_RPC_CLIENT_HOST']
+        port = int(os.environ['SIMULATION_RPC_CLIENT_PORT'])
+        module = os.environ['SIMULATION_RPC_CLIENT_MODULE']
+        simulation_rpc_client = getattr(import_module(module + ".Simulator"), 'SimulationJsonRpcClient')
+        self._client = simulation_rpc_client(host=host, port=port)
+
+        # LipVM Definition
         self._vm = LipVM("languages.statemachine")
+        self._interpreter: StateMachineInterpreter = self._vm.interpreter
+        self._interpreter.set_driver(self._client)
 
     def components(self):
         self._menu = Menu(self)
@@ -82,6 +99,20 @@ class StateMachineIDE(Tk):
         name = self._file_path if self._file_path else "Untitled"
         dirty_mark = "*" if self._dirty else ""
         self.title(f"{dirty_mark}{name} - State Machine IDE")
+
+    def start_interval_loop(self):
+        if self._interval_job is not None:
+            self.after_cancel(self._interval_job)
+        self._interval_job = self.after(self._interval_ms, self._interval_tick)
+
+    def _interval_tick(self):
+        self.on_interval()
+        self._interval_job = self.after(self._interval_ms, self._interval_tick)
+
+    def on_interval(self):
+
+        # Implement periodic IDE behavior here. This runs every 200ms.
+        self._interpreter.tick()
 
     def _content(self):
         return self._code.get("1.0", "end-1c")
@@ -179,6 +210,9 @@ class StateMachineIDE(Tk):
     def exit_app(self, _event=None):
         if not self._confirm_discard_changes():
             return "break"
+        if self._interval_job is not None:
+            self.after_cancel(self._interval_job)
+            self._interval_job = None
         self.destroy()
         return "break"
 
