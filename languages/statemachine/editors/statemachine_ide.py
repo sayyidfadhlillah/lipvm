@@ -5,6 +5,7 @@ import time
 from importlib import import_module
 from tkinter import *
 from tkinter import filedialog, messagebox
+from tkinter import ttk
 
 from backend.LipVM import LipVM
 from backend.parser import ParserException
@@ -23,10 +24,12 @@ class StateMachineIDE(Tk):
         self.geometry("800x600")
         self._file_path = None
         self._dirty = False
-        self._interval_ms = 200
+        self._interval_ms = self._load_positive_int_env("SIMULATION_TICK_INTERVAL_MS", 20)
+        self._interval_s = self._interval_ms / 1000.0
         self._interval_job = None
-        self._rpc_check_interval_s = 1.0
-        self._rpc_probe_timeout_s = 0.2
+        self._next_interval_at = 0.0
+        self._rpc_check_interval_s = self._load_positive_float_env("SIMULATION_RPC_CHECK_INTERVAL_S", 3.0)
+        self._rpc_probe_timeout_s = self._load_positive_float_env("SIMULATION_RPC_PROBE_TIMEOUT_S", 0.05)
         self._last_rpc_check_at = 0.0
         self._rpc_connected = False
         self._rpc_host = ""
@@ -76,10 +79,20 @@ class StateMachineIDE(Tk):
         self._scrollbar.config(command=self._code.yview)
         self._code.bind("<<Modified>>", self.on_modified)
         self._code.edit_modified(False)
+        self._event_frame = Frame(self)
+        self._event_label = Label(self._event_frame, text="Event:")
+        self._event_selected = StringVar(value="")
+        self._event_list = ttk.Combobox(self._event_frame, textvariable=self._event_selected, state="readonly", width=24)
+        self._event_submit_button = Button(self._event_frame, text="Submit", command=self.submit_event)
+        self._event_list.bind("<Return>", self.submit_event)
         self._rpc_status = Label(self, anchor=W, text="RPC: Disconnected")
 
     def layout(self):
         self._rpc_status.pack(side=BOTTOM, fill=X)
+        self._event_frame.pack(side=BOTTOM, fill=X, padx=6, pady=4)
+        self._event_label.pack(side=LEFT)
+        self._event_list.pack(side=LEFT, fill=X, expand=True, padx=(6, 6))
+        self._event_submit_button.pack(side=LEFT)
         self._scrollbar.pack(side=RIGHT, fill=Y)
         self._code.pack(fill=BOTH, expand=True)
 
@@ -118,6 +131,28 @@ class StateMachineIDE(Tk):
             if error:
                 message = f"{message} ({error})"
             self._rpc_status.config(text=message, fg="firebrick")
+
+    @staticmethod
+    def _load_positive_int_env(name: str, default: int) -> int:
+        raw = os.environ.get(name, "").strip()
+        if not raw:
+            return default
+        try:
+            value = int(raw)
+        except ValueError:
+            return default
+        return value if value > 0 else default
+
+    @staticmethod
+    def _load_positive_float_env(name: str, default: float) -> float:
+        raw = os.environ.get(name, "").strip()
+        if not raw:
+            return default
+        try:
+            value = float(raw)
+        except ValueError:
+            return default
+        return value if value > 0.0 else default
 
     def _initialize_rpc_client(self):
         self._rpc_host = os.environ.get("SIMULATION_RPC_CLIENT_HOST", "")
@@ -159,14 +194,19 @@ class StateMachineIDE(Tk):
     def start_interval_loop(self):
         if self._interval_job is not None:
             self.after_cancel(self._interval_job)
+        self._next_interval_at = time.monotonic() + self._interval_s
         self._interval_job = self.after(self._interval_ms, self._interval_tick)
 
     def _interval_tick(self):
+        now = time.monotonic()
         self.on_interval()
-        self._interval_job = self.after(self._interval_ms, self._interval_tick)
+        while self._next_interval_at <= now:
+            self._next_interval_at += self._interval_s
+        delay_ms = max(1, int((self._next_interval_at - now) * 1000))
+        self._interval_job = self.after(delay_ms, self._interval_tick)
 
     def on_interval(self):
-        # Implement periodic IDE behavior here. This runs every 200ms.
+        # Keep tick() as a black-box external call and only control cadence here.
         now = time.monotonic()
         if now - self._last_rpc_check_at >= self._rpc_check_interval_s:
             self._last_rpc_check_at = now
@@ -180,6 +220,27 @@ class StateMachineIDE(Tk):
             if error_text != self._last_tick_error:
                 print(error_text, file=sys.stderr)
                 self._last_tick_error = error_text
+
+    def submit_event(self, _event=None):
+        event_name = self._event_selected.get().strip()
+        if not event_name:
+            return "break"
+
+        if not self._interpreter.is_program_loaded():
+            messagebox.showwarning("Event Submission", "Load a valid state machine before submitting events.")
+            return "break"
+
+        self._interpreter.enqueue_event(event_name)
+        return "break"
+
+    def refresh_event_list(self):
+        events = self._interpreter.available_events()
+        self._event_list["values"] = events
+        if not events:
+            self._event_selected.set("")
+            return
+        if self._event_selected.get() not in events:
+            self._event_selected.set(events[0])
 
     def _content(self):
         return self._code.get("1.0", "end-1c")
@@ -208,6 +269,8 @@ class StateMachineIDE(Tk):
         if not self._confirm_discard_changes():
             return "break"
         self._set_content("")
+        self._event_list["values"] = []
+        self._event_selected.set("")
         self._file_path = None
         self._dirty = False
         self._update_title()
@@ -232,6 +295,7 @@ class StateMachineIDE(Tk):
             self._update_title()
             # When opening a file, the interpreter is automatically executed
             self._vm.interpreter.interpret(self._content())
+            self.refresh_event_list()
         except OSError as exc:
             messagebox.showerror("Open File", f"Could not open file:\n{exc}")
             return "break"
@@ -256,6 +320,7 @@ class StateMachineIDE(Tk):
                 f.write(self._content())
             self._dirty = False
             self._update_title()
+            self.refresh_event_list()
             return True
 
         except ParserException as e:

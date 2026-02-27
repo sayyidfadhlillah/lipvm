@@ -106,11 +106,15 @@ class LanguageInterpreter(Interpreter):
         '''
         :param code: The string to be interpreted
         '''
+        # Parse first: if syntax is invalid, keep the previous runtime unchanged.
+        tree = self._parser.parse(code)
 
-        super().interpret(code)
-
-        # Method reset_runtime() must not be called if we want to implement Live Modelling at Runtime
+        # Reset only after parsing succeeded, then load the new program.
         self._reset_runtime()
+        self._interpretation_stack = [self.visit(tree)]
+        self._interpretation_result = None
+        self._interpretation_steps = []
+        self._interpretation()
 
     def enqueue_event(self, event_name) -> None:
         '''
