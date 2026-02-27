@@ -1,5 +1,7 @@
 import os
+import socket
 import sys
+import time
 from importlib import import_module
 from tkinter import *
 from tkinter import filedialog, messagebox
@@ -23,25 +25,27 @@ class StateMachineIDE(Tk):
         self._dirty = False
         self._interval_ms = 200
         self._interval_job = None
+        self._rpc_check_interval_s = 1.0
+        self._rpc_probe_timeout_s = 0.2
+        self._last_rpc_check_at = 0.0
+        self._rpc_connected = False
+        self._rpc_host = ""
+        self._rpc_port = ""
+        self._client = None
+        self._last_tick_error = None
 
         self.components()
         self.layout()
         self.bind_shortcuts()
         self.protocol("WM_DELETE_WINDOW", self.exit_app)
         self._update_title()
-        self.start_interval_loop()
-
-        # JSON RPC Client for Simulation
-        host = os.environ['SIMULATION_RPC_CLIENT_HOST']
-        port = int(os.environ['SIMULATION_RPC_CLIENT_PORT'])
-        module = os.environ['SIMULATION_RPC_CLIENT_MODULE']
-        simulation_rpc_client = getattr(import_module(module + ".Simulator"), 'SimulationJsonRpcClient')
-        self._client = simulation_rpc_client(host=host, port=port)
 
         # LipVM Definition
         self._vm = LipVM("languages.statemachine")
         self._interpreter: StateMachineInterpreter = self._vm.interpreter
-        self._interpreter.set_driver(self._client)
+        self._interpreter.set_driver(None)
+        self._initialize_rpc_client()
+        self.start_interval_loop()
 
     def components(self):
         self._menu = Menu(self)
@@ -72,8 +76,10 @@ class StateMachineIDE(Tk):
         self._scrollbar.config(command=self._code.yview)
         self._code.bind("<<Modified>>", self.on_modified)
         self._code.edit_modified(False)
+        self._rpc_status = Label(self, anchor=W, text="RPC: Disconnected")
 
     def layout(self):
+        self._rpc_status.pack(side=BOTTOM, fill=X)
         self._scrollbar.pack(side=RIGHT, fill=Y)
         self._code.pack(fill=BOTH, expand=True)
 
@@ -100,6 +106,56 @@ class StateMachineIDE(Tk):
         dirty_mark = "*" if self._dirty else ""
         self.title(f"{dirty_mark}{name} - State Machine IDE")
 
+    def _set_rpc_status(self, connected: bool, error: str | None = None):
+        self._rpc_connected = connected
+        if connected:
+            self._rpc_status.config(
+                text=f"RPC: Connected ({self._rpc_host}:{self._rpc_port})",
+                fg="darkgreen"
+            )
+        else:
+            message = "RPC: Disconnected"
+            if error:
+                message = f"{message} ({error})"
+            self._rpc_status.config(text=message, fg="firebrick")
+
+    def _initialize_rpc_client(self):
+        self._rpc_host = os.environ.get("SIMULATION_RPC_CLIENT_HOST", "")
+        self._rpc_port = os.environ.get("SIMULATION_RPC_CLIENT_PORT", "")
+        module = os.environ.get("SIMULATION_RPC_CLIENT_MODULE", "")
+
+        if not self._rpc_host or not self._rpc_port or not module:
+            self._set_rpc_status(False, "missing RPC environment variables")
+            return
+
+        try:
+            client_port = int(self._rpc_port)
+            simulation_rpc_client = getattr(import_module(module + ".Simulator"), "SimulationJsonRpcClient")
+            self._client = simulation_rpc_client(host=self._rpc_host, port=client_port)
+            self._refresh_rpc_connection()
+        except Exception as exc:
+            self._client = None
+            self._interpreter.set_driver(None)
+            self._set_rpc_status(False, str(exc))
+
+    def _refresh_rpc_connection(self):
+        if self._client is None:
+            self._interpreter.set_driver(None)
+            self._set_rpc_status(False)
+            return
+
+        try:
+            port = int(self._rpc_port)
+            # Use a short TCP probe to avoid blocking the UI event loop on RPC calls.
+            with socket.create_connection((self._rpc_host, port), timeout=self._rpc_probe_timeout_s):
+                pass
+            self._interpreter.set_driver(self._client)
+            self._set_rpc_status(True)
+            self._last_tick_error = None
+        except Exception as exc:
+            self._interpreter.set_driver(None)
+            self._set_rpc_status(False, str(exc))
+
     def start_interval_loop(self):
         if self._interval_job is not None:
             self.after_cancel(self._interval_job)
@@ -110,9 +166,20 @@ class StateMachineIDE(Tk):
         self._interval_job = self.after(self._interval_ms, self._interval_tick)
 
     def on_interval(self):
-
         # Implement periodic IDE behavior here. This runs every 200ms.
-        self._interpreter.tick()
+        now = time.monotonic()
+        if now - self._last_rpc_check_at >= self._rpc_check_interval_s:
+            self._last_rpc_check_at = now
+            self._refresh_rpc_connection()
+        try:
+            self._interpreter.tick()
+            self._last_tick_error = None
+        except Exception as exc:
+            self._set_rpc_status(False, str(exc))
+            error_text = str(exc)
+            if error_text != self._last_tick_error:
+                print(error_text, file=sys.stderr)
+                self._last_tick_error = error_text
 
     def _content(self):
         return self._code.get("1.0", "end-1c")
@@ -171,6 +238,10 @@ class StateMachineIDE(Tk):
         except ParserException as e:
             print(str(e), file=sys.stderr)
             return False
+        except Exception as e:
+            self._set_rpc_status(False, str(e))
+            print(str(e), file=sys.stderr)
+            return False
 
         return "break"
 
@@ -193,6 +264,10 @@ class StateMachineIDE(Tk):
 
         except OSError as exc:
             messagebox.showerror("Save File", f"Could not save file:\n{exc}")
+            return False
+        except Exception as e:
+            self._set_rpc_status(False, str(e))
+            print(str(e), file=sys.stderr)
             return False
 
         return False
