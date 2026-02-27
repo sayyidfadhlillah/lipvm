@@ -4,3 +4,9 @@
 .antlr/
 .idea/
 __pycache__/
+# Ignore all .env files anywhere
+**/.env
+**/.env.*
+
+# But keep example file
+!**/.env.example

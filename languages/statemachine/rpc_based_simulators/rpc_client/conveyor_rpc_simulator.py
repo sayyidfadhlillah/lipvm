@@ -6,7 +6,8 @@ import os
 from typing import Any
 
 from jsonrpclib import Server
-from api_based_simulator.rpc_infrastructure.env_utils import load_env_file
+
+from languages.statemachine.rpc_based_simulators.utility.env_utils import load_env_file
 
 
 class ConveyorJsonRpcClient:

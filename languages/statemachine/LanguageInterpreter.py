@@ -94,12 +94,6 @@ class LanguageInterpreter(Interpreter):
         self._environment.primitives = {}
         self._install_primitives()
         self._driver = None
-        self._exposed_driver_methods = {
-            "clear_boxes",
-            "advance_boxes",
-            "has_any_collision",
-            "set_current_state_name",
-        }
 
     @property
     def parser(self):
