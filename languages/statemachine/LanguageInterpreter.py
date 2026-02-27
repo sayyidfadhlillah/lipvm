@@ -138,25 +138,43 @@ class LanguageInterpreter(Interpreter):
         return self._environment.machine is not None and self._environment.current_state is not None
 
     def current_state_name(self) -> str | None:
+        '''
+        Helper method to get the current state
+        :return: the current state name
+        '''
         if self._environment.current_state is None:
             return None
         return self._environment.current_state.name
 
     def pending_events(self) -> list[str]:
+        '''
+        Helper method to look which events still need to be processed
+        :return: a list of events that still need to be processed
+        '''
         return list(self._event_queue)
 
     def tick(self) -> None:
+
+        '''
+        Method that will be executed forever
+        :return:
+        '''
+
+        # If halt or current state and machine is not exist
         if self._halt:
             return
         if self._environment.machine is None or self._environment.current_state is None:
             return
 
+        # Execute the tick if the current state has a tick function
         current_state = self._environment.current_state
         if current_state.tick_function is not None:
             self._run_context(current_state.tick_function)
 
+        # Execute an event if there is any
         if self._event_queue:
             self._handle_event(self._event_queue.popleft())
+    # ----------- End of Public Methods ---------------- #
 
     # ----------- Private Methods ---------------- #
     def _install_primitives(self) -> None:
