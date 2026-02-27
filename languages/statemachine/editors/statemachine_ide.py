@@ -128,38 +128,43 @@ class StateMachineIDE(Tk):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 content = f.read()
+            self._set_content(content)
+            self._file_path = path
+            self._dirty = False
+            self._update_title()
+            # When opening a file, the interpreter is automatically executed
+            self._vm.interpreter.interpret(self._content())
         except OSError as exc:
             messagebox.showerror("Open File", f"Could not open file:\n{exc}")
             return "break"
-
-        self._set_content(content)
-        self._file_path = path
-        self._dirty = False
-        self._update_title()
-        return "break"
-
-    def interpret(self, code: str):
-
-        try:
-            self._vm.interpreter.interpret(code)
         except ParserException as e:
             print(str(e), file=sys.stderr)
+            return False
+
+        return "break"
 
     def save_file(self, _event=None):
         if not self._file_path:
             return self.save_as_file()
 
         try:
+            # The state machine should comply to the syntax before it can be saved
+            self._vm.interpreter.interpret(self._content())
             with open(self._file_path, "w", encoding="utf-8") as f:
                 f.write(self._content())
-            self.interpret(self._content())
+            self._dirty = False
+            self._update_title()
+            return True
+
+        except ParserException as e:
+            print(str(e), file=sys.stderr)
+            return False
+
         except OSError as exc:
             messagebox.showerror("Save File", f"Could not save file:\n{exc}")
             return False
 
-        self._dirty = False
-        self._update_title()
-        return True
+        return False
 
     def save_as_file(self, _event=None):
         path = filedialog.asksaveasfilename(

@@ -95,51 +95,46 @@ class LanguageInterpreter(Interpreter):
         self._install_primitives()
         self._driver = None
 
+    # ----------- Public Methods ---------------- #
     def set_driver(self, driver) -> None:
+        '''
+        :param driver: This is the JSON-RPC Client to be used inside the interpreter
+        '''
         self._driver = driver
 
-    def _install_primitives(self) -> None:
-        self._environment.primitives["print"] = lambda *values: print(*values)
-        self._environment.primitives["send_event"] = self.enqueue_event
-
-    def _reset_runtime(self) -> None:
-        self._event_queue.clear()
-        self._halt = False
-        self._environment.machine = None
-        self._environment.current_state = None
-        self._environment.sp = -1
-        self._environment.scopes = [None] * 100
-
-    def _run_context(self, ctx) -> None:
-        if ctx is None or self._halt:
-            return
-        self._interpretation_stack = [self.visit(ctx)]
-        self._interpretation_result = None
-        self._interpretation_steps = []
-        self._interpretation()
-
-    def load_program(self, code: str) -> None:
-        tree = self._parser.parse(code)
-        self._reset_runtime()
-        self._run_context(tree)
-
     def interpret(self, code: str):
+        '''
+        :param code: The string to be interpreted
+        '''
 
         super().interpret(code)
 
         # Method reset_runtime() must not be called if we want to implement Live Modelling at Runtime
         self._reset_runtime()
 
-
     def enqueue_event(self, event_name) -> None:
+        '''
+        Method to send an event to fire a transition
+        :param event_name: the transition event name
+        :return:
+        '''
+
         self._event_queue.append(str(event_name))
 
     def available_events(self) -> list[str]:
+        '''
+        Returns a list of available events to fire a transition
+        :return: a list of string
+        '''
         if self._environment.machine is None:
             return []
         return list(self._environment.machine.events)
 
     def is_program_loaded(self) -> bool:
+        '''
+        Helper method to check whether a program is loaded
+        :return: True if the program is loaded, False otherwise
+        '''
         return self._environment.machine is not None and self._environment.current_state is not None
 
     def current_state_name(self) -> str | None:
@@ -163,8 +158,29 @@ class LanguageInterpreter(Interpreter):
         if self._event_queue:
             self._handle_event(self._event_queue.popleft())
 
+    # ----------- Private Methods ---------------- #
+    def _install_primitives(self) -> None:
+        self._environment.primitives["print"] = lambda *values: print(*values)
+        self._environment.primitives["send_event"] = self.enqueue_event
+
+    def _reset_runtime(self) -> None:
+        self._event_queue.clear()
+        self._halt = False
+        self._environment.machine = None
+        self._environment.current_state = None
+        self._environment.sp = -1
+        self._environment.scopes = [None] * 100
+
+    def _run_context(self, ctx) -> None:
+        if ctx is None or self._halt:
+            return
+        self._interpretation_stack = [self.visit(ctx)]
+        self._interpretation_result = None
+        self._interpretation_steps = []
+        self._interpretation()
+
     def _handle_event(self, event_name: str) -> None:
-        if self.error_exist(event_name):
+        if self._error_exist(event_name):
             return
 
         target = self._environment.current_state.transitions[event_name]
@@ -176,6 +192,31 @@ class LanguageInterpreter(Interpreter):
         if self._environment.current_state.activation_function is not None:
             self._run_context(self._environment.current_state.activation_function)
 
+    def _error_exist(self, command: str):
+        if self._environment.machine is None or self._environment.current_state is None:
+            print("Machine is not initialized", file=sys.stderr)
+            return True
+
+        if command not in self._environment.machine.events:
+            print("Unrecognized event: " + str(command), file=sys.stderr)
+            return True
+
+        if not command in self._environment.current_state.transitions:
+            print("Cannot execute transition event \"" + str(command) + "\" from current state: " +
+                  str(self._environment.current_state), file=sys.stderr)
+            return True
+
+        target = self._environment.current_state.transitions[command]
+        if not target in self._environment.machine.states:
+            print("Cannot execute transition event " + str(command) + " from as " + target +
+                  " does not exist in the machine", file=sys.stderr)
+            return True
+
+        return False
+
+    # ----------- End of Private Methods ---------------- #
+
+    # ----------- Methods for Interpreting ---------------- #
     def visitMachine(self, ctx:LanguageParser.MachineContext):
         self._environment.machine = Machine(ctx.ID().getText())
 
@@ -353,26 +394,6 @@ class LanguageInterpreter(Interpreter):
         if self._environment.current_state.activation_function is not None:
             yield self.visit(self._environment.current_state.activation_function)
 
-    def error_exist(self, command: str):
-        if self._environment.machine is None or self._environment.current_state is None:
-            print("Machine is not initialized", file=sys.stderr)
-            return True
-
-        if command not in self._environment.machine.events:
-            print("Unrecognized event: " + str(command), file=sys.stderr)
-            return True
-
-        if not command in self._environment.current_state.transitions:
-            print("Cannot execute transition event \"" + str(command) + "\" from current state: " +
-                  str(self._environment.current_state), file=sys.stderr)
-            return True
-
-        target = self._environment.current_state.transitions[command]
-        if not target in self._environment.machine.states:
-            print("Cannot execute transition event " + str(command) + " from as " + target +
-                  " does not exist in the machine", file=sys.stderr)
-            return True
-
-        return False
+    # ----------- End of Methods for Interpreting ---------------- #
 
 del LanguageParser
