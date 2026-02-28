@@ -38,11 +38,11 @@ state ResetState
 
     tick: {
         
-        is_fully_retracted = cgripper_driver.retract_arm()
-        is_reached_home_pos = cgripper_driver.move_to_start()
+        is_fully_retracted = mch_driver.retract_arm()
+        is_reached_home_pos = mch_driver.move_to_start()
 
         if(is_fully_retracted && is_reached_home_pos){
-            cgripper_driver.release_box()
+            mch_driver.release_box()
             send_event(auto_primary)
         }
     }
@@ -77,7 +77,7 @@ state IdleState
 
     tick: {
         
-        detect_box_to_be_picked = cgripper_driver.detect_box_to_pick()
+        detect_box_to_be_picked = mch_driver.detect_box_to_pick()
 
         if(detect_box_to_be_picked){
             send_event(auto_primary)
@@ -99,11 +99,11 @@ state LowerToPickState
 
     tick: {
         
-        is_arm_fully_extended = cgripper_driver.extend_arm()
+        is_arm_fully_extended = mch_driver.extend_arm()
         
         if(is_arm_fully_extended){
 
-            is_box_gripped_already = cgripper_driver.grip_box()
+            is_box_gripped_already = mch_driver.grip_box()
             if(!is_box_gripped_already){
                 send_event(auto_secondary)
             }
@@ -125,7 +125,7 @@ state LiftAfterAbortState
     }
 
     tick: {
-        is_fully_retracted = cgripper_driver.retract_arm()
+        is_fully_retracted = mch_driver.retract_arm()
         if(is_fully_retracted){
             send_event(auto_primary)
         }
@@ -144,7 +144,7 @@ state ReturnToStartState
     }
 
     tick: {
-        is_reached_home_pos = cgripper_driver.move_to_start()
+        is_reached_home_pos = mch_driver.move_to_start()
         if(is_reached_home_pos){
             send_event(auto_primary)
         }
@@ -163,7 +163,7 @@ state LiftWithBoxState
     }
 
     tick: {
-        is_fully_retracted = cgripper_driver.retract_arm()
+        is_fully_retracted = mch_driver.retract_arm()
         if(is_fully_retracted){
             send_event(auto_primary)
         }
@@ -181,7 +181,7 @@ state MoveToDropState
     }
 
     tick: {
-        is_reaching_drop_point = cgripper_driver.move_to_end()
+        is_reaching_drop_point = mch_driver.move_to_end()
         if(is_reaching_drop_point){
             send_event(auto_primary)
         }
@@ -201,11 +201,11 @@ state LowerToDropState
     }
 
     tick: {
-        is_arm_fully_extended = cgripper_driver.extend_arm()
+        is_arm_fully_extended = mch_driver.extend_arm()
         
         if(is_arm_fully_extended){
 
-            is_box_released_already = cgripper_driver.drop_box()
+            is_box_released_already = mch_driver.drop_box()
             if(!is_box_released_already){
                 send_event(auto_secondary)
             }
@@ -227,7 +227,7 @@ state LiftAfterAbortState
     }
 
     tick: {
-        is_fully_retracted = cgripper_driver.retract_arm()
+        is_fully_retracted = mch_driver.retract_arm()
         if(is_fully_retracted){
             send_event(auto_primary)
         }
@@ -247,7 +247,7 @@ state LiftAfterDropState
     }
 
     tick: {
-        is_fully_retracted = cgripper_driver.retract_arm()
+        is_fully_retracted = mch_driver.retract_arm()
         if(is_fully_retracted){
             send_event(auto_primary)
         }
