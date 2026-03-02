@@ -10,7 +10,7 @@ initial: 'initialState' name=ID;
 
 state: 'state' name=ID transitions=transition* activate_func=activate? tick_func=tick? 'end';
 
-transition: name=ID '=>' stateName=ID;
+transition: name=ID '=>' (stateName=ID | targetCall=call);
 
 activate: 'activate:' body;
 tick: 'tick:' body;
@@ -23,11 +23,24 @@ variable: variableName=ID;
 literal: variable | NUMBER | STRING | TRUE | FALSE;
 driver_call: 'mch_driver.' driverCall=call;
 
-expression:
-    leftOperand=expression op=OPERATOR rightOperand=expression
-    | literal
-    | LPAREN expression RPAREN
-    | driver_call;
+expression: orExpression;
+
+orExpression: andExpression (OR andExpression)*;
+
+andExpression: additiveExpression (AND additiveExpression)*;
+
+additiveExpression: multiplicativeExpression (operator=(PLUS | MINUS) multiplicativeExpression)*;
+
+multiplicativeExpression: unaryExpression (operator=(MULTIPLY | DIVIDE) unaryExpression)*;
+
+unaryExpression:
+    operator=(NOT | MINUS) unaryExpression
+    | primaryExpression;
+
+primaryExpression:
+    literal
+    | driver_call
+    | LPAREN expression RPAREN;
 
 // Function definition and call
 arguments: expression (',' expression)*;
@@ -50,15 +63,20 @@ main: machine events initial state*;
 
 // == Define lexer rules ==
 ID : [a-zA-Z][a-zA-Z0-9_]*;
-NUMBER: '-'?[0-9]+;
+NUMBER: [0-9]+;
 STRING : '"' .*? '"' ;
-
-OPERATOR: '+' | '-' | '*' | '/' | '&&' | '||';
 
 LPAREN : '(' ;
 RPAREN : ')' ;
 LCBRACKET: '{';
 RCBRACKET: '}';
+AND: '&&';
+OR: '||';
+PLUS: '+';
+MINUS: '-';
+MULTIPLY: '*';
+DIVIDE: '/';
+NOT: '!';
 TRUE: 'True';
 FALSE: 'False';
 MCH_DRIVER: 'mch_driver';

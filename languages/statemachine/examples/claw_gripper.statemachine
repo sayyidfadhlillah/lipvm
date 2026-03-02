@@ -1,7 +1,5 @@
 statemachine ConveyorBelt
 
-// event with prefix auto only executed through 
-// function. Cannot be used manually
 events
     start
     stop

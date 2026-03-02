@@ -1,4 +1,4 @@
-# Generated from Language.g4 by ANTLR 4.13.2
+# Generated from C:/Users/hfadhlil/PycharmProjects/lipvm/languages/statemachine/Language.g4 by ANTLR 4.13.2
 from antlr4 import *
 if "." in __name__:
     from .LanguageParser import LanguageParser
@@ -66,6 +66,36 @@ class LanguageVisitor(ParseTreeVisitor):
 
     # Visit a parse tree produced by LanguageParser#expression.
     def visitExpression(self, ctx:LanguageParser.ExpressionContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by LanguageParser#orExpression.
+    def visitOrExpression(self, ctx:LanguageParser.OrExpressionContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by LanguageParser#andExpression.
+    def visitAndExpression(self, ctx:LanguageParser.AndExpressionContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by LanguageParser#additiveExpression.
+    def visitAdditiveExpression(self, ctx:LanguageParser.AdditiveExpressionContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by LanguageParser#multiplicativeExpression.
+    def visitMultiplicativeExpression(self, ctx:LanguageParser.MultiplicativeExpressionContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by LanguageParser#unaryExpression.
+    def visitUnaryExpression(self, ctx:LanguageParser.UnaryExpressionContext):
+        return self.visitChildren(ctx)
+
+
+    # Visit a parse tree produced by LanguageParser#primaryExpression.
+    def visitPrimaryExpression(self, ctx:LanguageParser.PrimaryExpressionContext):
         return self.visitChildren(ctx)
 
 
