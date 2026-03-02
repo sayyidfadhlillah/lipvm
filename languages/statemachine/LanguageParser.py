@@ -810,6 +810,7 @@ class LanguageParser ( Parser ):
         def __init__(self, parser, parent:ParserRuleContext=None, invokingState:int=-1):
             super().__init__(parent, invokingState)
             self.parser = parser
+            self.operand = None # OrExpressionContext
 
         def orExpression(self):
             return self.getTypedRuleContext(LanguageParser.OrExpressionContext,0)
@@ -834,7 +835,7 @@ class LanguageParser ( Parser ):
         try:
             self.enterOuterAlt(localctx, 1)
             self.state = 112
-            self.orExpression()
+            localctx.operand = self.orExpression()
         except RecognitionException as re:
             localctx.exception = re
             self._errHandler.reportError(self, re)
@@ -850,6 +851,10 @@ class LanguageParser ( Parser ):
         def __init__(self, parser, parent:ParserRuleContext=None, invokingState:int=-1):
             super().__init__(parent, invokingState)
             self.parser = parser
+            self._andExpression = None # AndExpressionContext
+            self.operands = list() # of AndExpressionContexts
+            self._OR = None # Token
+            self.operators = list() # of Tokens
 
         def andExpression(self, i:int=None):
             if i is None:
@@ -884,15 +889,18 @@ class LanguageParser ( Parser ):
         try:
             self.enterOuterAlt(localctx, 1)
             self.state = 114
-            self.andExpression()
+            localctx._andExpression = self.andExpression()
+            localctx.operands.append(localctx._andExpression)
             self.state = 119
             self._errHandler.sync(self)
             _la = self._input.LA(1)
             while _la==25:
                 self.state = 115
-                self.match(LanguageParser.OR)
+                localctx._OR = self.match(LanguageParser.OR)
+                localctx.operators.append(localctx._OR)
                 self.state = 116
-                self.andExpression()
+                localctx._andExpression = self.andExpression()
+                localctx.operands.append(localctx._andExpression)
                 self.state = 121
                 self._errHandler.sync(self)
                 _la = self._input.LA(1)
@@ -912,6 +920,10 @@ class LanguageParser ( Parser ):
         def __init__(self, parser, parent:ParserRuleContext=None, invokingState:int=-1):
             super().__init__(parent, invokingState)
             self.parser = parser
+            self._additiveExpression = None # AdditiveExpressionContext
+            self.operands = list() # of AdditiveExpressionContexts
+            self._AND = None # Token
+            self.operators = list() # of Tokens
 
         def additiveExpression(self, i:int=None):
             if i is None:
@@ -946,15 +958,18 @@ class LanguageParser ( Parser ):
         try:
             self.enterOuterAlt(localctx, 1)
             self.state = 122
-            self.additiveExpression()
+            localctx._additiveExpression = self.additiveExpression()
+            localctx.operands.append(localctx._additiveExpression)
             self.state = 127
             self._errHandler.sync(self)
             _la = self._input.LA(1)
             while _la==24:
                 self.state = 123
-                self.match(LanguageParser.AND)
+                localctx._AND = self.match(LanguageParser.AND)
+                localctx.operators.append(localctx._AND)
                 self.state = 124
-                self.additiveExpression()
+                localctx._additiveExpression = self.additiveExpression()
+                localctx.operands.append(localctx._additiveExpression)
                 self.state = 129
                 self._errHandler.sync(self)
                 _la = self._input.LA(1)
@@ -974,7 +989,12 @@ class LanguageParser ( Parser ):
         def __init__(self, parser, parent:ParserRuleContext=None, invokingState:int=-1):
             super().__init__(parent, invokingState)
             self.parser = parser
-            self.operator = None # Token
+            self._multiplicativeExpression = None # MultiplicativeExpressionContext
+            self.operands = list() # of MultiplicativeExpressionContexts
+            self._PLUS = None # Token
+            self.operators = list() # of Tokens
+            self._MINUS = None # Token
+            self._tset230 = None # Token
 
         def multiplicativeExpression(self, i:int=None):
             if i is None:
@@ -1015,21 +1035,24 @@ class LanguageParser ( Parser ):
         try:
             self.enterOuterAlt(localctx, 1)
             self.state = 130
-            self.multiplicativeExpression()
+            localctx._multiplicativeExpression = self.multiplicativeExpression()
+            localctx.operands.append(localctx._multiplicativeExpression)
             self.state = 135
             self._errHandler.sync(self)
             _la = self._input.LA(1)
             while _la==26 or _la==27:
                 self.state = 131
-                localctx.operator = self._input.LT(1)
+                localctx._tset230 = self._input.LT(1)
                 _la = self._input.LA(1)
                 if not(_la==26 or _la==27):
-                    localctx.operator = self._errHandler.recoverInline(self)
+                    localctx._tset230 = self._errHandler.recoverInline(self)
                 else:
                     self._errHandler.reportMatch(self)
                     self.consume()
+                localctx.operators.append(localctx._tset230)
                 self.state = 132
-                self.multiplicativeExpression()
+                localctx._multiplicativeExpression = self.multiplicativeExpression()
+                localctx.operands.append(localctx._multiplicativeExpression)
                 self.state = 137
                 self._errHandler.sync(self)
                 _la = self._input.LA(1)
@@ -1049,7 +1072,12 @@ class LanguageParser ( Parser ):
         def __init__(self, parser, parent:ParserRuleContext=None, invokingState:int=-1):
             super().__init__(parent, invokingState)
             self.parser = parser
-            self.operator = None # Token
+            self._unaryExpression = None # UnaryExpressionContext
+            self.operands = list() # of UnaryExpressionContexts
+            self._MULTIPLY = None # Token
+            self.operators = list() # of Tokens
+            self._DIVIDE = None # Token
+            self._tset255 = None # Token
 
         def unaryExpression(self, i:int=None):
             if i is None:
@@ -1090,21 +1118,24 @@ class LanguageParser ( Parser ):
         try:
             self.enterOuterAlt(localctx, 1)
             self.state = 138
-            self.unaryExpression()
+            localctx._unaryExpression = self.unaryExpression()
+            localctx.operands.append(localctx._unaryExpression)
             self.state = 143
             self._errHandler.sync(self)
             _la = self._input.LA(1)
             while _la==28 or _la==29:
                 self.state = 139
-                localctx.operator = self._input.LT(1)
+                localctx._tset255 = self._input.LT(1)
                 _la = self._input.LA(1)
                 if not(_la==28 or _la==29):
-                    localctx.operator = self._errHandler.recoverInline(self)
+                    localctx._tset255 = self._errHandler.recoverInline(self)
                 else:
                     self._errHandler.reportMatch(self)
                     self.consume()
+                localctx.operators.append(localctx._tset255)
                 self.state = 140
-                self.unaryExpression()
+                localctx._unaryExpression = self.unaryExpression()
+                localctx.operands.append(localctx._unaryExpression)
                 self.state = 145
                 self._errHandler.sync(self)
                 _la = self._input.LA(1)
@@ -1125,6 +1156,8 @@ class LanguageParser ( Parser ):
             super().__init__(parent, invokingState)
             self.parser = parser
             self.operator = None # Token
+            self.operand = None # UnaryExpressionContext
+            self.primary = None # PrimaryExpressionContext
 
         def unaryExpression(self):
             return self.getTypedRuleContext(LanguageParser.UnaryExpressionContext,0)
@@ -1172,12 +1205,12 @@ class LanguageParser ( Parser ):
                     self._errHandler.reportMatch(self)
                     self.consume()
                 self.state = 147
-                self.unaryExpression()
+                localctx.operand = self.unaryExpression()
                 pass
             elif token in [11, 17, 18, 19, 20, 31, 32]:
                 self.enterOuterAlt(localctx, 2)
                 self.state = 148
-                self.primaryExpression()
+                localctx.primary = self.primaryExpression()
                 pass
             else:
                 raise NoViableAltException(self)
@@ -1197,6 +1230,9 @@ class LanguageParser ( Parser ):
         def __init__(self, parser, parent:ParserRuleContext=None, invokingState:int=-1):
             super().__init__(parent, invokingState)
             self.parser = parser
+            self.literalOperand = None # LiteralContext
+            self.driverOperand = None # Driver_callContext
+            self.groupedExpression = None # ExpressionContext
 
         def literal(self):
             return self.getTypedRuleContext(LanguageParser.LiteralContext,0)
@@ -1209,12 +1245,12 @@ class LanguageParser ( Parser ):
         def LPAREN(self):
             return self.getToken(LanguageParser.LPAREN, 0)
 
+        def RPAREN(self):
+            return self.getToken(LanguageParser.RPAREN, 0)
+
         def expression(self):
             return self.getTypedRuleContext(LanguageParser.ExpressionContext,0)
 
-
-        def RPAREN(self):
-            return self.getToken(LanguageParser.RPAREN, 0)
 
         def getRuleIndex(self):
             return LanguageParser.RULE_primaryExpression
@@ -1239,19 +1275,19 @@ class LanguageParser ( Parser ):
             if token in [17, 18, 19, 31, 32]:
                 self.enterOuterAlt(localctx, 1)
                 self.state = 151
-                self.literal()
+                localctx.literalOperand = self.literal()
                 pass
             elif token in [11]:
                 self.enterOuterAlt(localctx, 2)
                 self.state = 152
-                self.driver_call()
+                localctx.driverOperand = self.driver_call()
                 pass
             elif token in [20]:
                 self.enterOuterAlt(localctx, 3)
                 self.state = 153
                 self.match(LanguageParser.LPAREN)
                 self.state = 154
-                self.expression()
+                localctx.groupedExpression = self.expression()
                 self.state = 155
                 self.match(LanguageParser.RPAREN)
                 pass

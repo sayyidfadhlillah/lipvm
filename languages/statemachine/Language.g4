@@ -23,24 +23,24 @@ variable: variableName=ID;
 literal: variable | NUMBER | STRING | TRUE | FALSE;
 driver_call: 'mch_driver.' driverCall=call;
 
-expression: orExpression;
+expression: operand=orExpression;
 
-orExpression: andExpression (OR andExpression)*;
+orExpression: operands+=andExpression (operators+=OR operands+=andExpression)*;
 
-andExpression: additiveExpression (AND additiveExpression)*;
+andExpression: operands+=additiveExpression (operators+=AND operands+=additiveExpression)*;
 
-additiveExpression: multiplicativeExpression (operator=(PLUS | MINUS) multiplicativeExpression)*;
+additiveExpression: operands+=multiplicativeExpression (operators+=(PLUS | MINUS) operands+=multiplicativeExpression)*;
 
-multiplicativeExpression: unaryExpression (operator=(MULTIPLY | DIVIDE) unaryExpression)*;
+multiplicativeExpression: operands+=unaryExpression (operators+=(MULTIPLY | DIVIDE) operands+=unaryExpression)*;
 
 unaryExpression:
-    operator=(NOT | MINUS) unaryExpression
-    | primaryExpression;
+    operator=(NOT | MINUS) operand=unaryExpression
+    | primary=primaryExpression;
 
 primaryExpression:
-    literal
-    | driver_call
-    | LPAREN expression RPAREN;
+    literalOperand=literal
+    | driverOperand=driver_call
+    | LPAREN groupedExpression=expression RPAREN;
 
 // Function definition and call
 arguments: expression (',' expression)*;
