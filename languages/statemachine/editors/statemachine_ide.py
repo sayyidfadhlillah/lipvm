@@ -1,8 +1,10 @@
+import argparse
 import os
 import socket
 import sys
 import time
 from importlib import import_module
+from pathlib import Path
 from tkinter import *
 from tkinter import filedialog, messagebox
 from tkinter import ttk
@@ -10,26 +12,61 @@ from tkinter import ttk
 from backend.LipVM import LipVM
 from backend.parser import ParserException
 from languages.statemachine.LanguageInterpreter import LanguageInterpreter as StateMachineInterpreter
+from languages.statemachine.rpc_based_simulators.utility.env_utils import load_env_file
 
 FILETYPES = [
     ("State Machine Models", "*.statemachine"),
     ("All files", "*.*"),
 ]
 
+ENV_FILETYPES = [
+    ("Environment files", ".env *.env.*"),
+    ("All files", "*.*"),
+]
+
+DEFAULT_SIMULATION_TICK_INTERVAL_MS = 20
+DEFAULT_SIMULATION_RPC_CHECK_INTERVAL_S = 3.0
+DEFAULT_SIMULATION_RPC_PROBE_TIMEOUT_S = 0.05
+
+SIMULATION_ENV_VARS = (
+    "SIMULATION_ENV_FILE",
+    "SIMULATION_RPC_CLIENT_HOST",
+    "SIMULATION_RPC_CLIENT_PORT",
+    "SIMULATION_RPC_CLIENT_MODULE",
+)
+
+
+def _default_env_file() -> str:
+    return os.environ.get("SIMULATION_ENV_FILE", ".env")
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="State Machine IDE")
+    parser.add_argument(
+        "--env-file",
+        default=_default_env_file(),
+        help="Environment file path to load before reading SIMULATION_* settings (default: SIMULATION_ENV_FILE or .env)",
+    )
+    return parser.parse_args()
+
+
 class StateMachineIDE(Tk):
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, env_file: str | None = None, **kwargs):
         super().__init__(*args, **kwargs)
+        self._base_simulation_env = {name: os.environ.get(name) for name in SIMULATION_ENV_VARS}
+        self._env_file_path = env_file or _default_env_file()
+        self._load_environment_file(self._env_file_path)
 
         self.geometry("800x600")
         self._file_path = None
         self._dirty = False
-        self._interval_ms = self._load_positive_int_env("SIMULATION_TICK_INTERVAL_MS", 20)
+        self._interval_ms = DEFAULT_SIMULATION_TICK_INTERVAL_MS
         self._interval_s = self._interval_ms / 1000.0
         self._interval_job = None
         self._next_interval_at = 0.0
-        self._rpc_check_interval_s = self._load_positive_float_env("SIMULATION_RPC_CHECK_INTERVAL_S", 3.0)
-        self._rpc_probe_timeout_s = self._load_positive_float_env("SIMULATION_RPC_PROBE_TIMEOUT_S", 0.05)
+        self._rpc_check_interval_s = DEFAULT_SIMULATION_RPC_CHECK_INTERVAL_S
+        self._rpc_probe_timeout_s = DEFAULT_SIMULATION_RPC_PROBE_TIMEOUT_S
         self._last_rpc_check_at = 0.0
         self._rpc_connected = False
         self._rpc_host = ""
@@ -74,6 +111,14 @@ class StateMachineIDE(Tk):
         self._edit_menu.add_command(label="Select All", accelerator="Ctrl+A", command=self.select_all)
         self._menu.add_cascade(label="Edit", menu=self._edit_menu)
 
+        self._env_frame = Frame(self)
+        self._env_label = Label(self._env_frame, text="Env file:")
+        self._env_file_selected = StringVar(value=self._env_file_path)
+        self._env_entry = Entry(self._env_frame, textvariable=self._env_file_selected)
+        self._env_entry.bind("<Return>", self.load_env_file_from_ui)
+        self._env_browse_button = Button(self._env_frame, text="Browse...", command=self.browse_env_file)
+        self._env_load_button = Button(self._env_frame, text="Load", command=self.load_env_file_from_ui)
+
         self._scrollbar = Scrollbar(self)
         self._code = Text(self, width=1, height=1, undo=True, yscrollcommand=self._scrollbar.set)
         self._scrollbar.config(command=self._code.yview)
@@ -88,6 +133,11 @@ class StateMachineIDE(Tk):
         self._rpc_status = Label(self, anchor=W, text="RPC: Disconnected")
 
     def layout(self):
+        self._env_frame.pack(side=TOP, fill=X, padx=6, pady=(6, 2))
+        self._env_label.pack(side=LEFT)
+        self._env_entry.pack(side=LEFT, fill=X, expand=True, padx=(6, 6))
+        self._env_browse_button.pack(side=LEFT, padx=(0, 6))
+        self._env_load_button.pack(side=LEFT)
         self._rpc_status.pack(side=BOTTOM, fill=X)
         self._event_frame.pack(side=BOTTOM, fill=X, padx=6, pady=4)
         self._event_label.pack(side=LEFT)
@@ -132,27 +182,25 @@ class StateMachineIDE(Tk):
                 message = f"{message} ({error})"
             self._rpc_status.config(text=message, fg="firebrick")
 
-    @staticmethod
-    def _load_positive_int_env(name: str, default: int) -> int:
-        raw = os.environ.get(name, "").strip()
-        if not raw:
-            return default
-        try:
-            value = int(raw)
-        except ValueError:
-            return default
-        return value if value > 0 else default
+    def _restore_base_simulation_env(self):
+        for name, value in self._base_simulation_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
-    @staticmethod
-    def _load_positive_float_env(name: str, default: float) -> float:
-        raw = os.environ.get(name, "").strip()
-        if not raw:
-            return default
-        try:
-            value = float(raw)
-        except ValueError:
-            return default
-        return value if value > 0.0 else default
+    def _load_environment_file(self, path: str, *, strict: bool = False) -> bool:
+        env_file = path.strip() or _default_env_file()
+        env_path = Path(env_file)
+        if strict and not env_path.is_file():
+            messagebox.showerror("Load Environment", f"Could not find environment file:\n{env_file}")
+            return False
+
+        self._restore_base_simulation_env()
+        load_env_file(env_file, override_existing=True)
+        os.environ["SIMULATION_ENV_FILE"] = env_file
+        self._env_file_path = env_file
+        return True
 
     def _initialize_rpc_client(self):
         self._rpc_host = os.environ.get("SIMULATION_RPC_CLIENT_HOST", "")
@@ -160,6 +208,8 @@ class StateMachineIDE(Tk):
         module = os.environ.get("SIMULATION_RPC_CLIENT_MODULE", "")
 
         if not self._rpc_host or not self._rpc_port or not module:
+            self._client = None
+            self._interpreter.set_driver(None)
             self._set_rpc_status(False, "missing RPC environment variables")
             return
 
@@ -172,6 +222,27 @@ class StateMachineIDE(Tk):
             self._client = None
             self._interpreter.set_driver(None)
             self._set_rpc_status(False, str(exc))
+
+    def browse_env_file(self, _event=None):
+        path = filedialog.askopenfilename(
+            title="Select Environment File",
+            filetypes=ENV_FILETYPES,
+        )
+        if not path:
+            return "break"
+        self._env_file_selected.set(path)
+        return self.load_env_file_from_ui()
+
+    def load_env_file_from_ui(self, _event=None):
+        if not self._load_environment_file(self._env_file_selected.get(), strict=True):
+            return "break"
+
+        self._env_file_selected.set(self._env_file_path)
+        self._last_rpc_check_at = 0.0
+        self._last_tick_error = None
+        self._initialize_rpc_client()
+        self.start_interval_loop()
+        return "break"
 
     def _refresh_rpc_connection(self):
         if self._client is None:
@@ -377,4 +448,5 @@ class StateMachineIDE(Tk):
         return "break"
 
 if __name__ == '__main__':
-    StateMachineIDE().mainloop()
+    args = _parse_args()
+    StateMachineIDE(env_file=args.env_file).mainloop()

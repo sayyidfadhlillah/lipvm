@@ -10,7 +10,7 @@ from jsonrpclib import Server
 from languages.statemachine.rpc_based_simulators.utility.env_utils import load_env_file
 
 
-class SimpleFactoryJsonRpcClient:
+class SimulationJsonRpcClient:
     """Simple JSON-RPC client for the simple factory simulator server."""
 
     def __init__(self, host: str = "127.0.0.1", port: int = 5003) -> None:

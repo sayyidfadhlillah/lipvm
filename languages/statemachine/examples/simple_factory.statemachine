@@ -1,0 +1,67 @@
+statemachine SimpleFactory
+
+events
+    start
+    stop
+    pause
+    reset
+    error
+    auto_primary
+    auto_secondary
+
+initialState StoppedState
+
+state StoppedState
+
+    start => ResetState
+    reset => ResetState
+
+    activate: {
+        print("Reached Stopped State")
+    }
+
+    tick: {
+        
+    }
+end
+
+state ResetState
+
+    auto_primary => IdleState
+
+    activate: {
+        print("Reached Reset State")
+        mch_driver.reset_supply_belt()
+        mch_driver.reset_delivery_belt()
+    }
+
+    tick: {
+        
+        is_fully_retracted = mch_driver.retract_arm()
+        is_reached_home_pos = mch_driver.move_to_start()
+
+        if(is_fully_retracted && is_reached_home_pos){
+            mch_driver.release_box()
+            send_event(auto_primary)
+        }
+    }
+
+end
+
+state ResetState
+
+    auto_primary => IdleState
+
+    activate: {
+        print("Reached Idle State")
+        mch_driver.start_supply_belt()
+        mch_driver.start_delivery_belt()
+    }
+
+    tick: {
+        if(mch_driver.has_box_to_be_gripped()){
+            print("Ready to Pick")
+        }
+    }
+
+end
