@@ -48,9 +48,9 @@ state ResetState
 
 end
 
-state ResetState
+state IdleState
 
-    auto_primary => IdleState
+    auto_primary => PickupState
 
     activate: {
         print("Reached Idle State")
@@ -61,6 +61,7 @@ state ResetState
     tick: {
         if(mch_driver.has_box_to_be_gripped()){
             print("Ready to Pick")
+            send_event(auto_primary)
         }
     }
 
