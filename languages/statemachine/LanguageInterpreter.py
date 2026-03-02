@@ -1,5 +1,6 @@
 import sys
 from collections import deque
+from typing import List
 
 from antlr4 import *
 from backend.interpreter import Interpreter
@@ -84,6 +85,7 @@ class LanguageInterpreter(Interpreter):
         # Initializing machines
         self._environment.machine = None
         self._environment.current_state = None
+        self._environment.last_executed_state = None
 
         # State of execution
         self._environment.sp = -1                # Scope pointer
@@ -115,6 +117,10 @@ class LanguageInterpreter(Interpreter):
         self._interpretation_result = None
         self._interpretation_steps = []
         self._interpretation()
+
+    def get_last_state(self) -> State:
+
+        pass
 
     def enqueue_event(self, event_name) -> None:
         '''
@@ -182,14 +188,17 @@ class LanguageInterpreter(Interpreter):
 
     # ----------- Private Methods ---------------- #
     def _install_primitives(self) -> None:
+
         self._environment.primitives["print"] = lambda *values: print(*values)
         self._environment.primitives["send_event"] = self.enqueue_event
+        self._environment.primitives["last_state"] = self.get_last_state
 
     def _reset_runtime(self) -> None:
         self._event_queue.clear()
         self._halt = False
         self._environment.machine = None
         self._environment.current_state = None
+        self._environment.last_executed_state = None
         self._environment.sp = -1
         self._environment.scopes = [None] * 100
 
@@ -206,6 +215,7 @@ class LanguageInterpreter(Interpreter):
             return
 
         target = self._environment.current_state.transitions[event_name]
+        self._environment.last_executed_state = self._environment.current_state
         self._environment.current_state = self._environment.machine.states[target]
 
         if self._driver is not None:
@@ -261,7 +271,17 @@ class LanguageInterpreter(Interpreter):
         state.add_tick_function(ctx.tick())
 
     def visitTransition(self, ctx:LanguageParser.TransitionContext):
-        yield ctx.ID(0).getText(), ctx.ID(1).getText()
+
+        if ctx.stateName is not None:
+            yield ctx.ID(0).getText(), ctx.ID(1).getText()
+
+        elif ctx.targetCall is not None:
+            state_name_resolve = yield self.visit(ctx.call())
+            yield ctx.ID(0).getText(), state_name_resolve
+
+        else:
+            raise Exception("Invalid target of transition. Transition source: " + ctx.ID(0).getText())
+
 
     def visitActivate(self, ctx:LanguageParser.ActivateContext):
         yield self.visit(ctx.body())
@@ -324,33 +344,99 @@ class LanguageInterpreter(Interpreter):
         else:
             yield int(ctx.NUMBER().getText())
 
-    def visitExpression(self, ctx: LanguageParser.ExpressionContext):
-        if ctx.leftOperand is not None and ctx.rightOperand is not None:
+    def visitOrExpression(self, ctx: LanguageParser.OrExpressionContext):
 
-            left = yield self.visit(ctx.leftOperand)
-            right = yield self.visit(ctx.rightOperand)
+        result = yield self.visit(ctx.operands[0])
 
-            match ctx.OPERATOR().getText():
-                case "+": yield left + right
-                case "-": yield left - right
-                case "*": yield left * right
-                case "/": yield left / right
-                case "&&": yield left and right
-                case '||': yield left or right
+        for i, operator_token in enumerate(ctx.operators):
+            right = yield self.visit(ctx.operands[i + 1])
+
+            match operator_token.getText():
+                case '||':
+                    result = result or right
                 case _:
-                    raise Exception("Unknown operator: " + str(ctx.OPERATOR().getText()))
+                    raise Exception(f"Unknown logical operator: {operator_token.getText()}")
 
-        elif ctx.literal() is not None:
+        yield result
+
+    def visitAndExpression(self, ctx: LanguageParser.AndExpressionContext):
+
+        result = yield self.visit(ctx.operands[0])
+
+        for i, operator_token in enumerate(ctx.operators):
+            right = yield self.visit(ctx.operands[i + 1])
+
+            match operator_token.getText():
+                case '&&':
+                    result = result or right
+                case _:
+                    raise Exception(f"Unknown logical operator: {operator_token.getText()}")
+
+        yield result
+
+    def visitAdditiveExpression(self, ctx: LanguageParser.AdditiveExpressionContext):
+
+        result = yield self.visit(ctx.operands[0])
+
+        for i, operator_token in enumerate(ctx.operators):
+            right = yield self.visit(ctx.operands[i + 1])
+
+            match operator_token.getText():
+                case '+':
+                    result = result + right
+                case '-':
+                    result = result - right
+                case _:
+                    raise Exception(f"Unknown logical operator: {operator_token.getText()}")
+
+        yield result
+
+    def visitMultiplicativeExpression(self, ctx: LanguageParser.MultiplicativeExpressionContext):
+
+        result = yield self.visit(ctx.operands[0])
+
+        for i, operator_token in enumerate(ctx.operators):
+            right = yield self.visit(ctx.operands[i + 1])
+
+            match operator_token.getText():
+                case '*':
+                    result = result * right
+                case '/':
+                    result = result / right
+                case _:
+                    raise Exception(f"Unknown logical operator: {operator_token.getText()}")
+
+        yield result
+
+    def visitUnaryExpression(self, ctx: LanguageParser.UnaryExpressionContext):
+
+        if ctx.operator is not None:
+            value = yield self.visit(ctx.operand)
+
+            match ctx.operator.text:
+                case '!':
+                    yield not value
+                case '-':
+                    yield -value
+                case _:
+                    raise Exception(f"Unknown unary operator: {ctx.operator.text}")
+        else:
+
+            yield self.visit(ctx.primary)
+
+    def visitPrimaryExpression(self, ctx: LanguageParser.PrimaryExpressionContext):
+
+        if ctx.literalOperand is not None:
             yield self.visit(ctx.literal())
 
-        elif ctx.expression(0) is not None:
-            yield self.visit(ctx.expression(0))
-
-        elif ctx.driver_call() is not None:
+        elif ctx.driverOperand is not None:
             yield self.visit(ctx.driver_call())
 
+        elif ctx.groupedExpression is not None:
+            yield self.visit(ctx.groupedExpression())
+
         else:
-            raise Exception("Unrecognized expression: " + str(ctx))
+            raise Exception("Unrecognized primary expression: " + str(ctx))
 
     def visitArguments(self, ctx: LanguageParser.ArgumentsContext):
         arguments = []
