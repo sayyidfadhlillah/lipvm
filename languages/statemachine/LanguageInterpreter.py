@@ -316,7 +316,8 @@ class LanguageInterpreter(Interpreter):
         if driver_method is None:
             raise Exception("Simulator driver has no method: " + function_to_call)
 
-        yield driver_method(*arguments)
+        result = driver_method(*arguments)
+        yield result.get(function_to_call) if isinstance(result, dict) else None
 
     def visitVariable(self, ctx: LanguageParser.VariableContext):
         variable_name = ctx.ID().getText()
@@ -351,11 +352,11 @@ class LanguageInterpreter(Interpreter):
         for i, operator_token in enumerate(ctx.operators):
             right = yield self.visit(ctx.operands[i + 1])
 
-            match operator_token.getText():
+            match operator_token.text:
                 case '||':
                     result = result or right
                 case _:
-                    raise Exception(f"Unknown logical operator: {operator_token.getText()}")
+                    raise Exception(f"Unknown logical operator: {operator_token.text}")
 
         yield result
 
@@ -366,11 +367,11 @@ class LanguageInterpreter(Interpreter):
         for i, operator_token in enumerate(ctx.operators):
             right = yield self.visit(ctx.operands[i + 1])
 
-            match operator_token.getText():
+            match operator_token.text:
                 case '&&':
                     result = result or right
                 case _:
-                    raise Exception(f"Unknown logical operator: {operator_token.getText()}")
+                    raise Exception(f"Unknown logical operator: {operator_token.text}")
 
         yield result
 
@@ -381,13 +382,13 @@ class LanguageInterpreter(Interpreter):
         for i, operator_token in enumerate(ctx.operators):
             right = yield self.visit(ctx.operands[i + 1])
 
-            match operator_token.getText():
+            match operator_token.text:
                 case '+':
                     result = result + right
                 case '-':
                     result = result - right
                 case _:
-                    raise Exception(f"Unknown logical operator: {operator_token.getText()}")
+                    raise Exception(f"Unknown logical operator: {operator_token.text}")
 
         yield result
 
@@ -398,13 +399,13 @@ class LanguageInterpreter(Interpreter):
         for i, operator_token in enumerate(ctx.operators):
             right = yield self.visit(ctx.operands[i + 1])
 
-            match operator_token.getText():
+            match operator_token.text:
                 case '*':
                     result = result * right
                 case '/':
                     result = result / right
                 case _:
-                    raise Exception(f"Unknown logical operator: {operator_token.getText()}")
+                    raise Exception(f"Unknown logical operator: {operator_token.text}")
 
         yield result
 

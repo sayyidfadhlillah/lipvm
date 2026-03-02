@@ -75,9 +75,9 @@ state IdleState
 
     tick: {
         
-        detect_box_to_be_picked = mch_driver.detect_box_to_pick()
+        has_box_to_pickup = mch_driver.has_pickup_boxes()
 
-        if(detect_box_to_be_picked){
+        if(has_box_to_pickup){
             send_event(auto_primary)
         }
     }
