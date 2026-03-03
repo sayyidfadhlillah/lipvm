@@ -51,6 +51,7 @@ end
 state IdleState
 
     auto_primary => PickupState
+    stop => StoppedState
 
     activate: {
         print("Reached Idle State")
@@ -65,4 +66,32 @@ state IdleState
         }
     }
 
+end
+
+state PickupState
+
+    auto_primary => LiftWithBoxState
+    auto_secondary => LiftAfterAbortState
+    stop => StoppedState
+    pause => PausedState
+    reset => ResetState
+
+    activate: {
+        print("Reached LowerToPick State")
+        mch_driver.halt_supply_belt()
+    }
+
+    tick: {
+        
+        is_arm_fully_extended = mch_driver.extend_arm()
+        
+        if(is_arm_fully_extended){
+
+            is_box_gripped_already = mch_driver.grip_box()
+            if(!is_box_gripped_already){
+                send_event(auto_secondary)
+            }
+            send_event(auto_primary)
+        }
+    }
 end
