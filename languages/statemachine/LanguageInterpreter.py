@@ -170,8 +170,6 @@ class LanguageInterpreter(Interpreter):
         '''
 
         # If halt or current state and machine is not exist
-        if self._halt:
-            return
         if self._environment.machine is None or self._environment.current_state is None:
             return
 
@@ -194,7 +192,6 @@ class LanguageInterpreter(Interpreter):
 
     def _reset_runtime(self) -> None:
         self._event_queue.clear()
-        self._halt = False
         self._environment.machine = None
         self._environment.current_state = None
         self._environment.last_executed_state = None
@@ -202,7 +199,7 @@ class LanguageInterpreter(Interpreter):
         self._environment.scopes = [None] * 100
 
     def _run_context(self, ctx) -> None:
-        if ctx is None or self._halt:
+        if ctx is None:
             return
         self._interpretation_stack = [self.visit(ctx)]
         self._interpretation_result = None
