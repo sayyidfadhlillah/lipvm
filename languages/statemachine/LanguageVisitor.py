@@ -78,6 +78,9 @@ class LanguageVisitor(ParseTreeVisitor):
     def visitAndExpression(self, ctx:LanguageParser.AndExpressionContext):
         return self.visitChildren(ctx)
 
+    # Visit a parse tree produced by LanguageParser#relEqExpression.
+    def visitRelEqExpression(self, ctx:LanguageParser.RelEqExpressionContext):
+        return self.visitChildren(ctx)
 
     # Visit a parse tree produced by LanguageParser#additiveExpression.
     def visitAdditiveExpression(self, ctx:LanguageParser.AdditiveExpressionContext):
@@ -131,6 +134,10 @@ class LanguageVisitor(ParseTreeVisitor):
 
     # Visit a parse tree produced by LanguageParser#main.
     def visitMain(self, ctx:LanguageParser.MainContext):
+        return self.visitChildren(ctx)
+
+    # Visit a parse tree produced by LanguageParser#relEqOp.
+    def visitRelEqOp(self, ctx:LanguageParser.RelEqOpContext):
         return self.visitChildren(ctx)
 
 

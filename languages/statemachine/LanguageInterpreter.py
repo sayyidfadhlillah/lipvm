@@ -375,6 +375,32 @@ class LanguageInterpreter(Interpreter):
 
         yield result
 
+    # Visit a parse tree produced by LanguageParser#relEqExpression.
+    def visitRelEqExpression(self, ctx: LanguageParser.RelEqExpressionContext):
+
+        result = yield self.visit(ctx.operands[0])
+
+        for i, operator_token in enumerate(ctx.operators):
+            right = yield self.visit(ctx.operands[i + 1])
+
+            match operator_token.text:
+                case '<':
+                    result = result < right
+                case '<=':
+                    result = result <= right
+                case '>':
+                    result = result > right
+                case '>=':
+                    result = result >= right
+                case '==':
+                    result = result == right
+                case '!=':
+                    result = not(result == right)
+                case _:
+                    raise Exception(f"Unknown comparison or equality operator: {operator_token.text}")
+
+        yield result
+
     def visitAdditiveExpression(self, ctx: LanguageParser.AdditiveExpressionContext):
 
         result = yield self.visit(ctx.operands[0])
@@ -388,7 +414,7 @@ class LanguageInterpreter(Interpreter):
                 case '-':
                     result = result - right
                 case _:
-                    raise Exception(f"Unknown logical operator: {operator_token.text}")
+                    raise Exception(f"Unknown addition operator: {operator_token.text}")
 
         yield result
 
@@ -404,8 +430,10 @@ class LanguageInterpreter(Interpreter):
                     result = result * right
                 case '/':
                     result = result / right
+                case '%':
+                    result = result % right
                 case _:
-                    raise Exception(f"Unknown logical operator: {operator_token.text}")
+                    raise Exception(f"Unknown multiplication operator: {operator_token.text}")
 
         yield result
 

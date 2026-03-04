@@ -27,11 +27,13 @@ expression: operand=orExpression;
 
 orExpression: operands+=andExpression (operators+=OR operands+=andExpression)*;
 
-andExpression: operands+=additiveExpression (operators+=AND operands+=additiveExpression)*;
+andExpression: operands+=relEqExpression (operators+=AND operands+=relEqExpression)*;
+
+relEqExpression: operands+=additiveExpression (operators+=relEqOp operands+=additiveExpression)*;
 
 additiveExpression: operands+=multiplicativeExpression (operators+=(PLUS | MINUS) operands+=multiplicativeExpression)*;
 
-multiplicativeExpression: operands+=unaryExpression (operators+=(MULTIPLY | DIVIDE) operands+=unaryExpression)*;
+multiplicativeExpression: operands+=unaryExpression (operators+=(MULTIPLY | DIVIDE | MODULO) operands+=unaryExpression)*;
 
 unaryExpression:
     operator=(NOT | MINUS) operand=unaryExpression
@@ -61,6 +63,9 @@ forloop
 // Main rule
 main: machine events initial state*;
 
+//Rules for Rquality or Comparison Operators
+relEqOp : '<' | '<=' | '>' | '>=' | '==' | '!=' ;
+
 // == Define lexer rules ==
 ID : [a-zA-Z][a-zA-Z0-9_]*;
 NUMBER: [0-9]+;
@@ -76,6 +81,7 @@ PLUS: '+';
 MINUS: '-';
 MULTIPLY: '*';
 DIVIDE: '/';
+MODULO: '%';
 NOT: '!';
 TRUE: 'True';
 FALSE: 'False';
