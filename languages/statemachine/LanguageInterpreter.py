@@ -1,6 +1,5 @@
 import sys
 from collections import deque
-from typing import List
 
 from antlr4 import *
 from backend.interpreter import Interpreter
@@ -120,7 +119,7 @@ class LanguageInterpreter(Interpreter):
 
     def get_last_state(self) -> State:
 
-        pass
+        return self._environment.last_executed_state
 
     def enqueue_event(self, event_name) -> None:
         '''
@@ -318,6 +317,10 @@ class LanguageInterpreter(Interpreter):
 
         result = driver_method(*arguments)
         yield result.get(function_to_call) if isinstance(result, dict) else None
+
+    def visitExpression(self, ctx: LanguageParser.ExpressionContext):
+        result = yield self.visit(ctx.operand)
+        yield result
 
     def visitVariable(self, ctx: LanguageParser.VariableContext):
         variable_name = ctx.ID().getText()

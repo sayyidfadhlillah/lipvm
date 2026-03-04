@@ -9,7 +9,7 @@ from tkinter import *
 from tkinter import filedialog, messagebox
 from tkinter import ttk
 
-from backend.LipVM import LipVM
+from backend.lipvm import LipVM
 from backend.parser import ParserException
 from languages.statemachine.LanguageInterpreter import LanguageInterpreter as StateMachineInterpreter
 from languages.statemachine.rpc_based_simulators.utility.env_utils import load_env_file
