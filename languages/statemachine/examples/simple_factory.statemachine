@@ -95,3 +95,21 @@ state PickupState
         }
     }
 end
+
+state LiftWithBoxState
+    auto_primary => MoveToDropState
+    stop => StoppedState
+    pause => PausedState
+    reset => ResetState
+
+    activate: {
+        print("Reached LiftWithBox State")
+    }
+
+    tick: {
+        is_fully_retracted = mch_driver.retract_arm()
+        if(is_fully_retracted){
+            send_event(auto_primary)
+        }
+    }
+end
