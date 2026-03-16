@@ -369,7 +369,7 @@ class LanguageInterpreter(Interpreter):
 
             match operator_token.text:
                 case '&&':
-                    result = result or right
+                    result = result and right
                 case _:
                     raise Exception(f"Unknown logical operator: {operator_token.text}")
 
