@@ -1,8 +1,7 @@
 from antlr4 import *
 from copy import deepcopy
 
-from backend.annotation import step
-from backend.interpreter import Interpreter
+from backend.interpreter import Interpreter, step
 
 from languages.statemachine.LanguageParser import LanguageParser
 
