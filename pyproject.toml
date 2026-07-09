@@ -6,13 +6,19 @@ readme = "README.md"
 requires-python = ">=3.14"
 testpaths = "tests"
 dependencies = [
-    "antlr4-python3-runtime>=4.13.2",
-    "debugpy>=1.8.19",
     "jsonrpclib>=0.2.1",
-    "semantic>=1.0.3",
+    "pyecore>=0.15.2",
+    "pyecoregen>=0.5.1",
+    "textx>=4.3.0",
 ]
 
 [dependency-groups]
 dev = [
+    "debugpy>=1.8.19",
     "pytest>=9.0.2",
+    "pyvis>=0.3.2",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
