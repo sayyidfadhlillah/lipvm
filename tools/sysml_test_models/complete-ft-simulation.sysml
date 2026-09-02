@@ -99,7 +99,7 @@ package TokenProducerSystem {
                 then WaitPlatformFree;
             
             state WaitPlatformFree;
-            accept TokenPlatformFreeEventMessage via tokenProducerMachine
+            accept when tokenProducerMachine.platformSens == false
                 then ProducingTokenRandomly;
         }
 
@@ -475,14 +475,9 @@ package VacuumGripperSystem {
             in placePosition: Position3D; 
 
             entry vgr.setup;
-            then SafePosition;
+            then Idle;
 
             /* First initialization */
-            state SafePosition;
-            accept VGRCommandSuccessEventMessage via vgr 
-                do vgr.moveToSafePosition
-                then Idle;
-            
             state Idle; 
             accept when tokenProducer.platformSens == true
                 do vgr.pick {
@@ -523,14 +518,9 @@ package VacuumGripperSystem {
             in placePosition: Position3D; 
 
             entry vgr.setup;
-            then SafePosition;
+            then Idle;
 
             /* First initialization */
-            state SafePosition;
-            accept VGRCommandSuccessEventMessage via vgr 
-                do vgr.moveToSafePosition
-                then Idle;
-            
             state Idle; 
             accept when cb.conveyorSensSwap == true
                 do vgr.pick {
@@ -699,6 +689,7 @@ package Main {
 
     private import TokenProducerSystem::TokenProducer::*;
     private import TokenProducerSystem::TokenProducerMessages::*;
+    private import TokenProducerSystem::TokenProducerStates::*;
 
     private import TokenDepoSystem::TokenDepo::*;
     private import TokenDepoSystem::TokenDepoCommands::*;
@@ -793,6 +784,10 @@ package Main {
             attribute :>> y = 21.0;
             attribute :>> degrees = 0.0;
         }
+    }
+
+    state tokenProducerMission: TokenProducerSimpleMission {
+        in tokenProducerMachine = tokenProd;
     }
 
     state cbFeederMission: ConveyorBeltSimpleMission {
