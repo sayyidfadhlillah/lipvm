@@ -25,11 +25,19 @@ VGR_TOWER_BASE_WIDTH: float = 1.4
 # Let's round it up to 13, taking the account that we add 0.5 cm.
 # With the model size, let's divide it up into 5, which yields 2.6
 DEFAULT_ARM_PIPE_LENGTH: float = 2.6
+DEFAULT_ARM_PIPE_WIDTH: float = 0.6
+
+# The rectangle hosting the suction head of the vacuum gripper
+# Length is 2.2 cm and width is 4 cm
+# Divided it by 4 to convert them into the model size
+VGR_TOKEN_GRIPPER_WIDTH: float = 0.8
+VGR_TOKEN_GRIPPER_LENGTH: float = 0.44
 
 # The gripper's arm held inside the gripper pipe can be extended/
 # In real life, the maximum arm extension length is 15.2 cm -> round it up to 15
 # With the model size, let's divide it up into 5, which yields 3.0
 MAX_ARM_EXTENSION_LENGTH_MODEL_SIZE: float = 3.0
+ARM_EXTENSION_PIPE_WIDTH: float = 0.4
 
 # The gripper's arm max encoder value (To fully extend the arm) which would be 1881
 # Round it up to 1890, so that it is easier to be divided by the current max arm extension length model.

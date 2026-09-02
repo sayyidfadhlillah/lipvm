@@ -60,8 +60,7 @@ class Reference(ElementDefinition, metaclass=MetaEClass):
 class Value(RuntimeStateElement, metaclass=MetaEClass):
     # An abstract class to specify a value
 
-    def evaluate(self, runtime: RuntimeState, current: "ExecutableStateUsage" = None, snapshot_from_bridge:
-            SimulationSnapshot = None):
+    def evaluate(self, runtime: RuntimeState):
         """Resolves this Value to its actual runtime result — e.g. a
         literal's own payload, a dereferenced Reference, or (for
         AttributeReference/BinaryExpression) a looked-up/computed result.
@@ -70,18 +69,6 @@ class Value(RuntimeStateElement, metaclass=MetaEClass):
         tree is a pure, side-effect-free read/computation with nothing to
         interleave mid-evaluation, so it runs eagerly to a plain Python
         value in one call — no Operation chain for a caller to drain.
-
-        `current` is the scope used to resolve this Value when it is being
-        evaluated. It can be mandatory (e.g., for resolving
-        AttributeReference to resolve a formal parameter) or optional (e.g., LiteralValue) depending
-        on the subclasses.
-
-        `snapshot_from_bridge` is the values from Simulation, particularly important if
-        some values refer to the attribute of Parts that are mutated by the Simulation model. For values that are
-        unrelated with the attributes of a part, they will not use this.
-
-        Placeholder only on this base class. See memory: todo-actualaction-resolution-pipeline
-        for the broader execution/resolution pipeline this is part of.
         """
         raise NotImplementedError('Value.evaluate() not yet implemented')
 
@@ -89,8 +76,7 @@ class LiteralValue(Value):
     el = EAttribute(eType=EString, lower=1, upper=1)
     scalar_type = EAttribute(eType=ScalarType, lower=0, upper=1)
 
-    def evaluate(self, runtime: RuntimeState, current: "ExecutableStateUsage" = None, snapshot_from_bridge:
-        SimulationSnapshot = None):
+    def evaluate(self, runtime: RuntimeState):
         """Converts `el` (always a string, per _literal_value()'s str(node.value)
         encoding in syntax.py) back to the Python type `scalar_type` names --
         not the raw string -- so a BinaryExpression comparing this against a
@@ -123,8 +109,7 @@ _LOOKUP_TABLE_NAME_BY_REFERENCE_TYPE = {
 class ReferenceValue(Value):
     el = EReference(eType=Reference, lower=1, upper=1, containment=False)
 
-    def evaluate(self, runtime: RuntimeState, current: "ExecutableStateUsage" = None, snapshot_from_bridge:
-        SimulationSnapshot = None):
+    def evaluate(self, runtime: RuntimeState):
         """Resolves `el` (a bare Reference) by its `reference_type` tag --
         different kinds of reference need genuinely different resolution
 
@@ -168,6 +153,9 @@ class ReferenceValue(Value):
           naming the unrecognized reference_type and what's actually
           handled, for the same reason.
         """
+
+        current = runtime.execution_context.current_state_usage
+
         if self.el.reference_type == "EnumerationUsage":
             *_, enum_name, member_name = self.el.qualified_name.split("::")
             enum_class = scan_for_subclasses(Enum)[enum_name]
@@ -189,7 +177,7 @@ class ReferenceValue(Value):
                     f"(available: {sorted(argument.name for argument in current.arguments)}) -- "
                     f"cannot resolve parameter reference '{self.el.qualified_name}'."
                 )
-            return binding.value.evaluate(runtime, current, snapshot_from_bridge)
+            return binding.value.evaluate(runtime)
 
         table_name = _LOOKUP_TABLE_NAME_BY_REFERENCE_TYPE.get(self.el.reference_type)
         if table_name is not None:
@@ -217,8 +205,7 @@ class AttributeReference(Value):
     target = EReference(eType=Reference, lower=0, upper=1, containment=False)
     attribute = EReference(eType=Reference, lower=0, upper=1, containment=False)
 
-    def evaluate(self, runtime: RuntimeState, current: "ExecutableStateUsage" = None, snapshot_from_bridge:
-        SimulationSnapshot = None):
+    def evaluate(self, runtime: RuntimeState):
         """Resolves `target` (the formal parameter, e.g. `conveyorBelt`) by
         wrapping it in a transient ReferenceValue and delegating to its own
         evaluate() -- `target` carries the same "Parameter" reference_type
@@ -238,7 +225,10 @@ class AttributeReference(Value):
         it is, is simply returned as-is rather than crashing on
         `.qualified_name` (which only a PartInstantiation actually has).
         """
-        resolved = ReferenceValue(el=self.target).evaluate(runtime, current)
+
+        snapshot_from_bridge = runtime.execution_context.current_snapshot
+
+        resolved = ReferenceValue(el=self.target).evaluate(runtime)
         if not isinstance(resolved, PartInstantiation):
             raise NotImplementedError('Currently, only handling a case where attribute reference involves'
                                       'Part Instantiation. Please handle it first before continuing.')
@@ -263,15 +253,14 @@ class BinaryExpression(Value):
     left = EReference(eType=Value, lower=1, upper=1, containment=True)
     right = EReference(eType=Value, lower=1, upper=1, containment=True)
 
-    def evaluate(self, runtime: RuntimeState, current: "ExecutableStateUsage" = None, snapshot_from_bridge:
-        SimulationSnapshot = None):
+    def evaluate(self, runtime: RuntimeState):
         """Plain recursive calls -- `current` passed to both sub-evaluations
         unchanged (not re-resolved here), so an AttributeReference nested
         anywhere in left/right still resolves against the same running
         instance this whole expression is being evaluated for.
         """
-        left = self.left.evaluate(runtime, current, snapshot_from_bridge)
-        right = self.right.evaluate(runtime, current, snapshot_from_bridge)
+        left = self.left.evaluate(runtime)
+        right = self.right.evaluate(runtime)
         return _BINARY_OPERATORS[self.operator](left, right)
 
 class Record(ElementDefinition, metaclass=MetaEClass):
@@ -394,7 +383,7 @@ class ActualAction(ElementDefinition, metaclass=MetaEClass):
     # action_def — it's left as a bare Reference, not resolved here.
     target = EReference(eType=Reference, lower=0, upper=1, containment=False)
 
-    def evaluate(self, runtime: RuntimeState, current: "ExecutableStateUsage" = None):
+    def evaluate(self, runtime: RuntimeState):
         """Plain eager call, matching every other runtime record's evaluate()
         except ExecutableStateUsage's own (the one genuine VM-step boundary,
         see its docstring) -- @operation used to decorate this method, but
@@ -455,7 +444,7 @@ class ActualAction(ElementDefinition, metaclass=MetaEClass):
         name = action_def.name if action_def is not None else None
 
         if self.target is None:
-            bound = {argument.name: argument.value.evaluate(runtime, current) for argument in self.arguments}
+            bound = {argument.name: argument.value.evaluate(runtime) for argument in self.arguments}
             registry = _simulation_model_registry()
             if name not in registry:
                 raise LookupError(
@@ -465,7 +454,7 @@ class ActualAction(ElementDefinition, metaclass=MetaEClass):
             registry[name](**bound).evaluate()
             return
 
-        part_instantiation = ReferenceValue(el=self.target).evaluate(runtime, current)
+        part_instantiation = ReferenceValue(el=self.target).evaluate(runtime)
         if not isinstance(part_instantiation, PartInstantiation):
             raise NotImplementedError(
                 f"'{self.qualified_name}' is performed through '{self.target.qualified_name}', which "
@@ -494,12 +483,12 @@ class ActualAction(ElementDefinition, metaclass=MetaEClass):
                     # unexpected keyword argument.
                     continue
                 if parameter.default_value is not None:
-                    bound[parameter.name] = parameter.default_value.evaluate(runtime, current)
+                    bound[parameter.name] = parameter.default_value.evaluate(runtime)
         if origin_occurrence is not None:
             for argument in origin_occurrence.arguments:
-                bound[argument.name] = argument.value.evaluate(runtime, current)
+                bound[argument.name] = argument.value.evaluate(runtime)
         for argument in self.arguments:
-            bound[argument.name] = argument.value.evaluate(runtime, current)
+            bound[argument.name] = argument.value.evaluate(runtime)
 
         SimulationBridge.call_action(runtime.channel, part_instantiation.qualified_name, self.name, **bound)
 
@@ -527,8 +516,7 @@ class TransitionTriggerBySignal(TransitionTrigger, metaclass=MetaEClass):
     signal_origin = EReference(eType=Reference, lower=0, upper=1, containment=True)
     via = EReference(eType=Reference, lower=0, upper=1, containment=True)
 
-    def evaluate(self, runtime: RuntimeState, current: "ExecutableStateUsage",
-                 event_occurrence: "EventOccurrence") -> bool:
+    def evaluate(self, runtime: RuntimeState, event_occurrence: "EventOccurrence") -> bool:
 
         # If the events captured by the executable state do not match the guard, immediate false
         if self.signal_origin.qualified_name != event_occurrence.event_type.qualified_name:
@@ -544,15 +532,14 @@ class TransitionTriggerBySignal(TransitionTrigger, metaclass=MetaEClass):
             return False
 
         # If no, then continue to evaluate
-        bound_part = ReferenceValue(el=self.via).evaluate(runtime, current)
+        bound_part = ReferenceValue(el=self.via).evaluate(runtime)
         return bound_part is not None and bound_part.qualified_name == event_occurrence.source.qualified_name
 
 class TransitionTriggerByWhenCondition(TransitionTrigger, metaclass=MetaEClass):
 
     condition = EReference(eType=Value, lower=0, upper=1, containment=True)
 
-    def evaluate(self, runtime: RuntimeState, current: "ExecutableStateUsage", latest_simulation_snapshot:
-    SimulationSnapshot) -> bool:
+    def evaluate(self, runtime: RuntimeState) -> bool:
         """Evaluates `condition` to a plain bool, right now -- Value.evaluate()
         is a plain eager call (not @operation-decorated), so this needs no
         Operation-chain draining, just a bool() around whatever it returns.
@@ -570,7 +557,7 @@ class TransitionTriggerByWhenCondition(TransitionTrigger, metaclass=MetaEClass):
         reason.
         """
         try:
-            return bool(self.condition.evaluate(runtime, current, latest_simulation_snapshot))
+            return bool(self.condition.evaluate(runtime))
         except PartNotReadyError:
             return False
 
@@ -612,10 +599,10 @@ class Transition(RuntimeStateElement, metaclass=MetaEClass):
     def set_effect(self, actual_action):
         self.effect = actual_action
 
-    def evaluate(self, runtime: RuntimeState, current: "ExecutableStateUsage" = None):
+    def evaluate(self, runtime: RuntimeState):
 
         if self.effect is not None:
-            return self.effect.evaluate(runtime, current)
+            return self.effect.evaluate(runtime)
 
 class StateUsage(ElementDefinition, metaclass=MetaEClass):
     """Runtime registry entry for a StateDef's own nested substate (e.g.
@@ -737,6 +724,9 @@ class ExecutableStateUsage(ElementDefinition, metaclass=MetaEClass):
         docstring for why that used to be otherwise and no longer is.
         """
 
+        #Step 0, set the execution context
+        runtime.execution_context.begin(self, runtime.channel)
+
         #Step 1: Only start executing this ExecutableStateUsage if the StateDef is resolved, otherwise just return None
         record_referenced_state_def: Record = runtime.sysml.lookup_table_state_defs.get_reference(
             self.state_def_origin.qualified_name)
@@ -759,7 +749,7 @@ class ExecutableStateUsage(ElementDefinition, metaclass=MetaEClass):
 
         #Step 1: Run the entry action
         if original_state_def.entry_action is not None:
-            original_state_def.entry_action.evaluate(runtime, self)
+            original_state_def.entry_action.evaluate(runtime)
 
         #Step 2: start the transition
         transition = original_state_def.default_transition
@@ -776,9 +766,9 @@ class ExecutableStateUsage(ElementDefinition, metaclass=MetaEClass):
             # only once self.current genuinely reflects target_state, matching _fire_transition()'s
             # own ordering for every later transition.
             if target_state.entry is not None:
-                target_state.entry.evaluate(runtime, self)
+                target_state.entry.evaluate(runtime)
 
-    def _find_matching_transition(self, runtime_state: RuntimeState, current_context: "ExecutableStateUsage"):
+    def _find_matching_transition(self, runtime_state: RuntimeState):
         """Returns the first transition out of `current` whose trigger
         actually fires, checking TransitionTriggerBySignal against every
         item currently in `pending` (not just the oldest one) and
@@ -811,24 +801,20 @@ class ExecutableStateUsage(ElementDefinition, metaclass=MetaEClass):
         nothing in `pending` right now is relevant to `current`, nothing
         already queued will ever become relevant to it later either.
         """
-        latest_simulation_snapshot: Optional[SimulationSnapshot] = None
-        snapshot_captured = False
+        current_context = runtime_state.execution_context.current_state_usage
 
         for transition in self.current.contained_transitions:
             trigger = transition.trigger
             if isinstance(trigger, TransitionTriggerBySignal):
                 matched_item = next(
                     (item for item in current_context.pending
-                     if trigger.evaluate(runtime_state, current_context, item)),
+                     if trigger.evaluate(runtime_state, item)),
                     None)
                 if matched_item is not None:
                     current_context.pending.remove(matched_item)
                     return transition
             elif isinstance(trigger, TransitionTriggerByWhenCondition):
-                if not snapshot_captured:
-                    latest_simulation_snapshot = runtime_state.channel.latest_snapshot.read()
-                    snapshot_captured = True
-                if trigger.evaluate(runtime_state, current_context, latest_simulation_snapshot):
+                if trigger.evaluate(runtime_state):
                     return transition
 
         if current_context.pending:
@@ -855,7 +841,7 @@ class ExecutableStateUsage(ElementDefinition, metaclass=MetaEClass):
         if self.current is None:
             return
 
-        transition = self._find_matching_transition(runtime, self)
+        transition = self._find_matching_transition(runtime)
         if transition is not None:
             self._fire_transition(runtime, transition, original_state_def)
 
@@ -865,10 +851,10 @@ class ExecutableStateUsage(ElementDefinition, metaclass=MetaEClass):
 
         #Step 1: run the exit action of the current StateUsage
         if current_state_usage.exit is not None:
-            current_state_usage.exit.evaluate(runtime, self)
+            current_state_usage.exit.evaluate(runtime)
 
         #Step 2: run the transition effect
-        designated_transition.evaluate(runtime, self)
+        designated_transition.evaluate(runtime)
 
         #Step 3: change the current pointer to the new StateUsage
         target_state: StateUsage = original_state_def.get_substate(designated_transition.target.qualified_name)
@@ -876,7 +862,7 @@ class ExecutableStateUsage(ElementDefinition, metaclass=MetaEClass):
 
         #Step 4: run the entry action of the newly appointed StateUsage
         if target_state.entry is not None:
-            target_state.entry.evaluate(runtime, self)
+            target_state.entry.evaluate(runtime)
 
 class PartDef(ElementDefinition, metaclass=MetaEClass):
 
@@ -902,8 +888,7 @@ class CompositeCustomValue(Value):
     # itself be a CompositeCustomValue, for further nesting.
     elements = EReference(eType=Argument, lower=0, upper=-1, containment=True)
 
-    def evaluate(self, runtime: RuntimeState, current: "ExecutableStateUsage" = None, snapshot_from_bridge:
-            SimulationSnapshot = None):
+    def evaluate(self, runtime: RuntimeState):
         """Resolves `type`'s bare class name against the same
         scan_for_subclasses(CustomAttributeModel) registry
         Factory.instantiate_machine() already uses on the simulation side
@@ -928,7 +913,7 @@ class CompositeCustomValue(Value):
         """
         class_name = self.type.reference_type.qualified_name.split("::")[-1]
         values = {
-            element.name: element.value.evaluate(runtime, current, snapshot_from_bridge)
+            element.name: element.value.evaluate(runtime)
             for element in self.elements
         }
         return scan_for_subclasses(CustomAttributeModel)[class_name](**values)
@@ -1014,6 +999,17 @@ class PartInstantiation(ElementDefinition, metaclass=MetaEClass):
                 attrs[redefinition.name] = _custom_attribute_value(redefinition.value)
 
         SimulationBridge.instantiate(runtime.channel, self.qualified_name, part_def_name, **attrs)
+
+class ExecutionContext(RuntimeStateElement, metaclass=MetaEClass):
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.current_state_usage = None
+        self.current_snapshot = None
+
+    def begin(self, state_usage: "ExecutableStateUsage", channel) -> None:
+        self.current_state_usage = state_usage
+        self.current_snapshot = channel.latest_snapshot.read()
 
 class SysmlRuntimeState(RuntimeStateElement, metaclass=MetaEClass):
 

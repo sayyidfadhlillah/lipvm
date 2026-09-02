@@ -2,7 +2,8 @@ import pygame
 
 from languages.sysmlv2.simulation_models.fischertechnik.fischertechnik_parts.vacuum_gripper import (
     VacuumGripperMachine, VGR_BASE_LENGTH, VGR_BASE_WIDTH, VGR_TOWER_BASE_LENGTH, VGR_TOWER_BASE_WIDTH,
-    DEFAULT_ARM_PIPE_LENGTH, MAX_ARM_EXTENSION_LENGTH_MODEL_SIZE, MAX_ARM_ENCODER_VALUE, MAX_ROT_ENCODER_VALUE,
+    DEFAULT_ARM_PIPE_LENGTH, DEFAULT_ARM_PIPE_WIDTH, MAX_ARM_EXTENSION_LENGTH_MODEL_SIZE, MAX_ARM_ENCODER_VALUE,
+    MAX_ROT_ENCODER_VALUE, VGR_TOKEN_GRIPPER_LENGTH, VGR_TOKEN_GRIPPER_WIDTH, ARM_EXTENSION_PIPE_WIDTH,
 )
 from languages.sysmlv2.simulation_models.fischertechnik.fischertechnik_parts_visualization.generic import MachineVisualization
 from languages.sysmlv2.simulation_models.fischertechnik import factory_visualization as fv
@@ -34,13 +35,43 @@ VGR_MAX_REACH = DEFAULT_ARM_PIPE_LENGTH + MAX_ARM_EXTENSION_LENGTH_MODEL_SIZE
 VGR_BASE_COLOR = (90, 90, 100)         # the foot -- base metal plate
 VGR_TOWER_COLOR = (55, 55, 65)         # the mast the arm pivots around/reaches out from
 VGR_ARM_PIPE_COLOR = (120, 120, 130)   # fixed pipe, center to DEFAULT_ARM_PIPE_LENGTH -- doesn't itself extend
-VGR_ARM_PIPE_WIDTH = 6                 # px
+
+# VGR_ARM_PIPE_WIDTH used to live here as a fixed 6px constant, unrelated to
+# SCALE -- moved into draw() below (same DEFAULT_ARM_PIPE_WIDTH * SCALE
+# pattern CB_SENSOR_WIDTH already established for the conveyor belt's own
+# sensor bands) now that DEFAULT_ARM_PIPE_WIDTH is a real model-unit
+# measurement (fischertechnik_parts/vacuum_gripper.py), not an arbitrary
+# rendering choice. MIN_VGR_ARM_PIPE_WIDTH_PX floors it at 1px --
+# pygame.draw.line() needs width >= 1 to draw anything at all.
+MIN_VGR_ARM_PIPE_WIDTH_PX = 1
 VGR_ARM_ROD_COLOR = (150, 150, 160)    # extendable segment, past the fixed pipe -- driven live by armEncoder
-VGR_ARM_ROD_WIDTH = 4                  # px -- thinner than the fixed pipe, reads as the inner rod sliding out of it
-VGR_GRIPPER_COLOR = (255, 195, 20)     # tip marker, at the end of the (currently zero-length) extendable segment -- brighter/more saturated than before so it pops against the base plate's cool greys even at 1px clearance from its edge
-VGR_GRIPPER_OUTLINE_COLOR = TOKEN_OUTLINE_COLOR  # ring around the marker -- the marker sits mostly past the base plate's own edge, over the viewport's white BACKGROUND_COLOR/light GRID_LINE_COLOR, so it needs the same dark outline factory_visualization.py already uses to keep a light-colored shape visible against that background (a white ring would vanish there)
-VGR_GRIPPER_RADIUS = 6                 # px
-VGR_GRIPPER_OUTLINE_WIDTH = 2           # px
+
+# VGR_ARM_ROD_WIDTH used to live here as a fixed 4px constant, unrelated to
+# SCALE -- moved into draw() below (same ARM_EXTENSION_PIPE_WIDTH * SCALE
+# pattern DEFAULT_ARM_PIPE_WIDTH already established for the fixed pipe)
+# now that ARM_EXTENSION_PIPE_WIDTH is a real model-unit measurement
+# (fischertechnik_parts/vacuum_gripper.py), not an arbitrary rendering
+# choice. MIN_VGR_ARM_ROD_WIDTH_PX floors it at 1px, same
+# pygame.draw.line() reasoning as MIN_VGR_ARM_PIPE_WIDTH_PX.
+MIN_VGR_ARM_ROD_WIDTH_PX = 1
+VGR_GRIPPER_COLOR = (255, 195, 20)     # suction head, at the end of the (currently zero-length) extendable segment -- brighter/more saturated than before so it pops against the base plate's cool greys even at 1px clearance from its edge
+VGR_GRIPPER_OUTLINE_COLOR = TOKEN_OUTLINE_COLOR  # outline around the suction head -- it sits mostly past the base plate's own edge, over the viewport's white BACKGROUND_COLOR/light GRID_LINE_COLOR, so it needs the same dark outline factory_visualization.py already uses to keep a light-colored shape visible against that background (a white ring would vanish there)
+
+# The suction head used to be drawn as a plain circle (VGR_GRIPPER_RADIUS,
+# now removed); replaced with the actual rectangular footprint of the real
+# part (fischertechnik_parts/vacuum_gripper.py's VGR_TOKEN_GRIPPER_LENGTH/
+# WIDTH, real measurements -- 2.2cm/4cm -- not arbitrary rendering choices,
+# same CB_SENSOR_WIDTH/DEFAULT_ARM_PIPE_WIDTH treatment). LENGTH runs along
+# local +x (the arm's own reach axis, same convention DEFAULT_ARM_PIPE_LENGTH/
+# DEFAULT_ARM_PIPE_WIDTH already use), WIDTH perpendicular to it.
+# MIN_VGR_TOKEN_GRIPPER_SIZE_PX floors each side at 1px so the rect stays
+# visible/renderable at very low SCALE. Outline width is a fraction of the
+# rect's own smaller side rather than a fixed pixel amount -- same
+# TOKEN_OUTLINE_WIDTH_RATIO reasoning factory_visualization.py's
+# _draw_token() uses, so the ring doesn't dominate the shape at small SCALE.
+MIN_VGR_TOKEN_GRIPPER_SIZE_PX = 1
+VGR_TOKEN_GRIPPER_OUTLINE_WIDTH_RATIO = 0.15
+MIN_VGR_TOKEN_GRIPPER_OUTLINE_WIDTH_PX = 1
 
 
 class VacuumGripperVisualization(MachineVisualization):
@@ -119,14 +150,24 @@ class VacuumGripperVisualization(MachineVisualization):
         arm_surface = pygame.Surface((VGR_SURFACE_WIDTH, VGR_SURFACE_HEIGHT), pygame.SRCALPHA)
         arm_center = arm_surface.get_rect().center
 
+        pipe_width = max(MIN_VGR_ARM_PIPE_WIDTH_PX, round(DEFAULT_ARM_PIPE_WIDTH * SCALE))
         pipe_end = (arm_center[0] + DEFAULT_ARM_PIPE_LENGTH * SCALE, arm_center[1])
-        pygame.draw.line(arm_surface, VGR_ARM_PIPE_COLOR, arm_center, pipe_end, width=VGR_ARM_PIPE_WIDTH)
+        pygame.draw.line(arm_surface, VGR_ARM_PIPE_COLOR, arm_center, pipe_end, width=pipe_width)
 
         extension = arm_encoder_to_model_size(machine.armEncoder, MAX_ARM_ENCODER_VALUE, MAX_ARM_EXTENSION_LENGTH_MODEL_SIZE)
         tip_end = (pipe_end[0] + extension * SCALE, arm_center[1])
-        pygame.draw.line(arm_surface, VGR_ARM_ROD_COLOR, pipe_end, tip_end, width=VGR_ARM_ROD_WIDTH)
-        pygame.draw.circle(arm_surface, VGR_GRIPPER_COLOR, tip_end, VGR_GRIPPER_RADIUS)
-        pygame.draw.circle(arm_surface, VGR_GRIPPER_OUTLINE_COLOR, tip_end, VGR_GRIPPER_RADIUS, width=VGR_GRIPPER_OUTLINE_WIDTH)
+        rod_width = max(MIN_VGR_ARM_ROD_WIDTH_PX, round(ARM_EXTENSION_PIPE_WIDTH * SCALE))
+        pygame.draw.line(arm_surface, VGR_ARM_ROD_COLOR, pipe_end, tip_end, width=rod_width)
+
+        gripper_px_length = max(MIN_VGR_TOKEN_GRIPPER_SIZE_PX, round(VGR_TOKEN_GRIPPER_LENGTH * SCALE))
+        gripper_px_width = max(MIN_VGR_TOKEN_GRIPPER_SIZE_PX, round(VGR_TOKEN_GRIPPER_WIDTH * SCALE))
+        gripper_outline_width = max(
+            MIN_VGR_TOKEN_GRIPPER_OUTLINE_WIDTH_PX,
+            round(min(gripper_px_length, gripper_px_width) * VGR_TOKEN_GRIPPER_OUTLINE_WIDTH_RATIO))
+        gripper_rect = pygame.Rect(0, 0, gripper_px_length, gripper_px_width)
+        gripper_rect.center = tip_end
+        pygame.draw.rect(arm_surface, VGR_GRIPPER_COLOR, gripper_rect, border_radius=2)
+        pygame.draw.rect(arm_surface, VGR_GRIPPER_OUTLINE_COLOR, gripper_rect, width=gripper_outline_width, border_radius=2)
 
         arm_rotation_degrees = rot_encoder_to_degrees(machine.rotEncoder, MAX_ROT_ENCODER_VALUE)
         rotated_arm = pygame.transform.rotate(arm_surface, arm_rotation_degrees)

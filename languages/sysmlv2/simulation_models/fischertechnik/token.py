@@ -1,6 +1,14 @@
 from languages.sysmlv2.simulation_models.fischertechnik.custom_attribute import FactoryCoordinate
 from languages.sysmlv2.simulation_models.fischertechnik.enums import TokenColorKind
 
+# The physical part is a square housing that hosts a circular marker; only
+# the circle's own diameter is measured here (3cm), since that's the only
+# part factory_visualization.py's _draw_token() actually renders. Divided
+# by 5 to convert to model size, same real-to-model factor every other
+# fischertechnik_parts/ measurement in this codebase uses (e.g. CB_LENGTH,
+# VGR_BASE_LENGTH).
+TOKEN_DIAMETER: float = 0.6
+
 
 class Token:
 

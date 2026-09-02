@@ -20,7 +20,7 @@ from languages.sysmlv2.simulation_models.fischertechnik.factory import TICKS_PER
 from languages.sysmlv2.simulation_models.fischertechnik.fischertechnik_parts.conveyor_belt import CB_LENGTH, CB_WIDTH
 from languages.sysmlv2.simulation_models.fischertechnik.fischertechnik_parts.vacuum_gripper import VacuumGripperMachine
 from languages.sysmlv2.simulation_models.fischertechnik.fischertechnik_parts_visualization.generic import MachineVisualization
-from languages.sysmlv2.simulation_models.fischertechnik.token import Token
+from languages.sysmlv2.simulation_models.fischertechnik.token import Token, TOKEN_DIAMETER
 from languages.sysmlv2.simulation_models.generic import SimulationVisualization
 from languages.sysmlv2.simulation_models.registry import scan_for_subclasses
 
@@ -254,7 +254,29 @@ FEED_COLOR = (40, 160, 90)           # left end, in the belt's own unrotated fra
 SWAP_COLOR = (210, 150, 30)          # right end, in the belt's own unrotated frame: where parts exit/swap
 TREAD_SPACING = 10
 
-TOKEN_RADIUS = 8
+# Token now has a real physical measurement -- TOKEN_DIAMETER (token.py),
+# the circular marker's own diameter (3cm/5=0.6 model units) -- same
+# CB_SENSOR_WIDTH/DEFAULT_ARM_PIPE_WIDTH treatment, not an arbitrary
+# rendering choice. (An earlier version of this ratio was calibrated
+# against the belt's own cross-section, CB_WIDTH/2, in the absence of a
+# real measurement; before that, an even earlier version just reproduced
+# the old fixed 8px at DEFAULT_SCALE=10 -- both approximations, now
+# replaced by the actual measured part.) MIN_TOKEN_RADIUS_PX is a floor so
+# a token stays visible even if MIN_SCALE ever ends up lower than today's
+# value.
+TOKEN_RADIUS_RATIO = TOKEN_DIAMETER / 2
+MIN_TOKEN_RADIUS_PX = 3
+
+# Outline stroke width as a fraction of the token's own (already-floored)
+# radius, not a fixed pixel width -- a fixed 1px stroke stayed the same
+# absolute weight regardless of token size, so it read as a thin hairline
+# at high SCALE but dominated the whole shape (a large fraction of a small
+# radius) at low SCALE, making the token look "blobbier" there. Floored at
+# 1px (pygame.draw.circle's width=0 means filled, not "no border", so this
+# must never reach 0) rather than letting it vanish on a very small token.
+TOKEN_OUTLINE_WIDTH_RATIO = 0.15
+MIN_TOKEN_OUTLINE_WIDTH_PX = 1
+
 TOKEN_OUTLINE_COLOR = (60, 60, 60)   # ring around every token; keeps a WHITE token visible against BACKGROUND_COLOR
 TOKEN_COLORS = {
     TokenColorKind.BLUE: (30, 90, 200),
@@ -443,10 +465,18 @@ class FischertechnikVisualization(SimulationVisualization):
     def _draw_token(self, screen: pygame.Surface, token: Token) -> None:
         """Draws a Token as a small filled circle at its current position, on
         top of whatever machine it's sitting on, colored by its TokenColorKind.
+
+        Radius computed fresh from the current SCALE each call (not a fixed
+        pixel constant) -- SCALE can change mid-session on a window resize
+        (FischertechnikVisualization.run()'s VIDEORESIZE handling), same
+        reasoning every fischertechnik_parts_visualization/ module now reads
+        SCALE live rather than at its own import time.
         """
+        radius = max(MIN_TOKEN_RADIUS_PX, int(TOKEN_RADIUS_RATIO * SCALE))
+        outline_width = max(MIN_TOKEN_OUTLINE_WIDTH_PX, round(radius * TOKEN_OUTLINE_WIDTH_RATIO))
         px, py = _to_screen(token.position)
-        pygame.draw.circle(screen, TOKEN_COLORS[token.color], (px, py), TOKEN_RADIUS)
-        pygame.draw.circle(screen, TOKEN_OUTLINE_COLOR, (px, py), TOKEN_RADIUS, 1)
+        pygame.draw.circle(screen, TOKEN_COLORS[token.color], (px, py), radius)
+        pygame.draw.circle(screen, TOKEN_OUTLINE_COLOR, (px, py), radius, outline_width)
 
     def _draw_start_panel(self, screen: pygame.Surface, font: pygame.font.Font, label_font: pygame.font.Font,
                            on_start_click) -> list[tuple[pygame.Rect, object]]:

@@ -1001,6 +1001,7 @@ endif
 
         #Initialization for Bridge to the simulation
         runtime.elements.append(ThreadChannel(name="channel"))
+        runtime.elements.append(rt.ExecutionContext(name="execution_context"))
 
         executable_stats = executable_state_usages(runtime.sysml.lookup_table_executable_state_usages)
         if not executable_stats:
