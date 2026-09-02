@@ -17,6 +17,15 @@ CB_WIDTH: float = 1.1
 #There is a tolerance gap of 5 cm on either end, where it is the placement for the sensor
 END_OF_CB_TOLERANCE: float = 1.0
 
+# Physical footprint of a feed/swap sensor along the belt's direction of
+# travel -- not yet hand-measured on the real hardware, so this is a
+# placeholder chosen to reproduce the visualization's previous fixed 6px
+# stripe at SCALE=10 (6 / 10 = 0.6), rather than an independently guessed
+# model value like FEED_TO_SWAP_LENGTH's old placeholder was. Replace with
+# the real measurement once known. Also reused by SortingLineVisualization
+# for its entry sensor, drawn at this same conveyor-belt scale.
+CB_SENSOR_WIDTH: float = 0.6
+
 # Model-unit distance between a belt's feed and swap sensor positions --
 # the span a token actually rides across, end to end. Derived from the
 # belt's own physical length (CB_LENGTH) minus the sensor's inset from

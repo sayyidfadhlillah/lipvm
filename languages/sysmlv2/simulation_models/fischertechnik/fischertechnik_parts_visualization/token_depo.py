@@ -5,8 +5,9 @@ from languages.sysmlv2.simulation_models.fischertechnik.fischertechnik_parts.tok
     TOKEN_RECEIVER_LENGTH, TOKEN_RECEIVER_WIDTH, TOKEN_RECEIVER_OFFSET,
 )
 from languages.sysmlv2.simulation_models.fischertechnik.fischertechnik_parts_visualization.generic import MachineVisualization
+from languages.sysmlv2.simulation_models.fischertechnik import factory_visualization as fv
 from languages.sysmlv2.simulation_models.fischertechnik.factory_visualization import (
-    SCALE, _to_screen, TOKEN_OUTLINE_COLOR,
+    _to_screen, TOKEN_OUTLINE_COLOR,
 )
 
 TOKEN_DEPO_BASE_COLOR = (70, 90, 110)         # cool slate housing -- this machine's where tokens end up
@@ -17,8 +18,11 @@ TOKEN_DEPO_RECEIVER_COLOR = (160, 180, 200)   # lighter surface where a stored t
 # kept symmetric so the base's center lands exactly on the surface's own
 # center (what pygame.transform.rotate rotates around).
 _HALF_SPAN = TOKEN_DEPO_BASE_LENGTH / 2 + TOKEN_RECEIVER_LENGTH
-TOKEN_DEPO_SURFACE_WIDTH = int(2 * _HALF_SPAN * SCALE) + 20
-TOKEN_DEPO_SURFACE_HEIGHT = int(max(TOKEN_DEPO_BASE_WIDTH, TOKEN_RECEIVER_WIDTH) * SCALE) + 20
+# TOKEN_DEPO_SURFACE_WIDTH/HEIGHT used to live here as module-level
+# constants baked from SCALE at import time; moved into draw() below since
+# SCALE can now change mid-session on a window resize
+# (FischertechnikVisualization.run()'s VIDEORESIZE handling) and these
+# need to track it.
 
 
 class TokenDepoVisualization(MachineVisualization):
@@ -61,7 +65,11 @@ class TokenDepoVisualization(MachineVisualization):
         ]
 
     def draw(self, screen: pygame.Surface, machine: TokenDepoMachine) -> None:
-        surface = pygame.Surface((TOKEN_DEPO_SURFACE_WIDTH, TOKEN_DEPO_SURFACE_HEIGHT), pygame.SRCALPHA)
+        SCALE = fv.SCALE
+        surface_width = int(2 * _HALF_SPAN * SCALE) + 20
+        surface_height = int(max(TOKEN_DEPO_BASE_WIDTH, TOKEN_RECEIVER_WIDTH) * SCALE) + 20
+
+        surface = pygame.Surface((surface_width, surface_height), pygame.SRCALPHA)
         center = surface.get_rect().center
 
         base_rect = pygame.Rect(0, 0, int(TOKEN_DEPO_BASE_LENGTH * SCALE), int(TOKEN_DEPO_BASE_WIDTH * SCALE))

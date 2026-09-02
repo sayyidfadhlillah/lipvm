@@ -6,8 +6,9 @@ from languages.sysmlv2.simulation_models.fischertechnik.fischertechnik_parts.tok
     TOKEN_PLATFORM_LENGTH, TOKEN_PLATFORM_WIDTH, TOKEN_PLATFORM_OFFSET,
 )
 from languages.sysmlv2.simulation_models.fischertechnik.fischertechnik_parts_visualization.generic import MachineVisualization
+from languages.sysmlv2.simulation_models.fischertechnik import factory_visualization as fv
 from languages.sysmlv2.simulation_models.fischertechnik.factory_visualization import (
-    SCALE, _to_screen, TOKEN_OUTLINE_COLOR, PANEL_TEXT_COLOR, PANEL_LINE_HEIGHT, PANEL_SUMMARY_GAP,
+    _to_screen, TOKEN_OUTLINE_COLOR, PANEL_TEXT_COLOR, PANEL_LINE_HEIGHT, PANEL_SUMMARY_GAP,
     PALETTE_SWATCH_SIZE, draw_color_palette,
     PANEL_BUTTON_WIDTH, PANEL_BUTTON_HEIGHT, PANEL_BUTTON_GAP, PANEL_BUTTON_COLOR,
     PANEL_BUTTON_HOVER_COLOR, PANEL_BUTTON_TEXT_COLOR,
@@ -24,8 +25,11 @@ TOKEN_PROD_PLATFORM_COLOR = (220, 190, 140) # lighter surface where a produced t
 # center lands exactly on the surface's own center (what
 # pygame.transform.rotate rotates around).
 _HALF_SPAN = TOKEN_PROD_BASE_LENGTH / 2 + TOKEN_PLATFORM_LENGTH
-TOKEN_PROD_SURFACE_WIDTH = int(2 * _HALF_SPAN * SCALE) + 20
-TOKEN_PROD_SURFACE_HEIGHT = int(max(TOKEN_PROD_BASE_WIDTH, TOKEN_PLATFORM_WIDTH) * SCALE) + 20
+# TOKEN_PROD_SURFACE_WIDTH/HEIGHT used to live here as module-level
+# constants baked from SCALE at import time; moved into draw() below since
+# SCALE can now change mid-session on a window resize
+# (FischertechnikVisualization.run()'s VIDEORESIZE handling) and these
+# need to track it.
 
 
 class TokenProducerVisualization(MachineVisualization):
@@ -96,7 +100,11 @@ class TokenProducerVisualization(MachineVisualization):
         return buttons
 
     def draw(self, screen: pygame.Surface, machine: TokenProducerMachine) -> None:
-        surface = pygame.Surface((TOKEN_PROD_SURFACE_WIDTH, TOKEN_PROD_SURFACE_HEIGHT), pygame.SRCALPHA)
+        SCALE = fv.SCALE
+        surface_width = int(2 * _HALF_SPAN * SCALE) + 20
+        surface_height = int(max(TOKEN_PROD_BASE_WIDTH, TOKEN_PLATFORM_WIDTH) * SCALE) + 20
+
+        surface = pygame.Surface((surface_width, surface_height), pygame.SRCALPHA)
         center = surface.get_rect().center
 
         base_rect = pygame.Rect(0, 0, int(TOKEN_PROD_BASE_LENGTH * SCALE), int(TOKEN_PROD_BASE_WIDTH * SCALE))

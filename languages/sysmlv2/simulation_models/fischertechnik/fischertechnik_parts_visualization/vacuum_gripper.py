@@ -5,7 +5,8 @@ from languages.sysmlv2.simulation_models.fischertechnik.fischertechnik_parts.vac
     DEFAULT_ARM_PIPE_LENGTH, MAX_ARM_EXTENSION_LENGTH_MODEL_SIZE, MAX_ARM_ENCODER_VALUE, MAX_ROT_ENCODER_VALUE,
 )
 from languages.sysmlv2.simulation_models.fischertechnik.fischertechnik_parts_visualization.generic import MachineVisualization
-from languages.sysmlv2.simulation_models.fischertechnik.factory_visualization import SCALE, _to_screen, TOKEN_OUTLINE_COLOR
+from languages.sysmlv2.simulation_models.fischertechnik import factory_visualization as fv
+from languages.sysmlv2.simulation_models.fischertechnik.factory_visualization import _to_screen, TOKEN_OUTLINE_COLOR
 from languages.sysmlv2.simulation_models.fischertechnik.movement_computation_model import arm_encoder_to_model_size, rot_encoder_to_degrees
 
 # Farthest the arm can ever reach from center (fixed pipe + full extension)
@@ -24,8 +25,11 @@ from languages.sysmlv2.simulation_models.fischertechnik.movement_computation_mod
 # to be symmetric around it).
 VGR_MAX_REACH = DEFAULT_ARM_PIPE_LENGTH + MAX_ARM_EXTENSION_LENGTH_MODEL_SIZE
 
-VGR_SURFACE_WIDTH = int(2 * VGR_MAX_REACH * SCALE) + 20
-VGR_SURFACE_HEIGHT = VGR_SURFACE_WIDTH
+# VGR_SURFACE_WIDTH/HEIGHT used to live here as a module-level constant
+# baked from SCALE at import time; moved into draw() below since SCALE can
+# now change mid-session on a window resize
+# (FischertechnikVisualization.run()'s VIDEORESIZE handling) and this
+# needs to track it.
 
 VGR_BASE_COLOR = (90, 90, 100)         # the foot -- base metal plate
 VGR_TOWER_COLOR = (55, 55, 65)         # the mast the arm pivots around/reaches out from
@@ -84,6 +88,10 @@ class VacuumGripperVisualization(MachineVisualization):
         ]
 
     def draw(self, screen: pygame.Surface, machine: VacuumGripperMachine) -> None:
+        SCALE = fv.SCALE
+        VGR_SURFACE_WIDTH = int(2 * VGR_MAX_REACH * SCALE) + 20
+        VGR_SURFACE_HEIGHT = VGR_SURFACE_WIDTH
+
         surface = pygame.Surface((VGR_SURFACE_WIDTH, VGR_SURFACE_HEIGHT), pygame.SRCALPHA)
         center = surface.get_rect().center
 

@@ -24,21 +24,7 @@ from languages.sysmlv2.simulation_models.fischertechnik.token import Token
 from languages.sysmlv2.simulation_models.generic import SimulationVisualization
 from languages.sysmlv2.simulation_models.registry import scan_for_subclasses
 
-SCALE = 20                       # pixels per model unit
 MODEL_RANGE = 40                 # factory floor spans model coordinates 0..MODEL_RANGE on both x and y
-
-# Wide enough that a token at the FULL_LENGTH boundary -- FULL_LENGTH / 2
-# model units from center, the furthest a token can travel while still
-# owned (see ConveyorBeltMachine.advance()) -- still visually sits on the
-# drawn belt, keeping the same 10px-per-side margin the original design
-# had just beyond FEED_TO_SWAP_LENGTH / 2 alone.
-BELT_WIDTH = CB_LENGTH * SCALE + 20
-
-# Model-unit, cross-belt (perpendicular-to-travel) dimension -- purely a
-# rendering size, unlike FEED_TO_SWAP_LENGTH/FULL_LENGTH (conveyor_belt.py), which
-# also drive movement math. No simulation behavior depends on this value,
-# so it lives here rather than in conveyor_belt.py.
-BELT_HEIGHT = CB_WIDTH * SCALE
 
 
 def _floor_layout(model_range: float, scale: int, belt_width: int, belt_height: int) -> tuple[tuple[int, int], tuple[int, int]]:
@@ -57,7 +43,23 @@ def _floor_layout(model_range: float, scale: int, belt_width: int, belt_height: 
     return (size, size), (margin, size - margin)
 
 
-VIEWPORT_SIZE, ORIGIN = _floor_layout(MODEL_RANGE, SCALE, BELT_WIDTH, BELT_HEIGHT)  # factory floor drawing area, excludes the attribute panel
+def _belt_size(scale: int) -> tuple[float, float]:
+    """(BELT_WIDTH, BELT_HEIGHT) at an arbitrary candidate `scale` -- not
+    just the final SCALE -- since MAX_SCALE detection below needs a belt's
+    on-screen footprint at every scale it tries. BELT_WIDTH is wide enough
+    that a token at the FULL_LENGTH boundary -- FULL_LENGTH / 2 model units
+    from center, the furthest a token can travel while still owned (see
+    ConveyorBeltMachine.advance()) -- still visually sits on the drawn
+    belt, keeping the same 10px-per-side margin the original design had
+    just beyond FEED_TO_SWAP_LENGTH / 2 alone. BELT_HEIGHT is the belt's
+    model-unit, cross-belt (perpendicular-to-travel) dimension -- purely a
+    rendering size, unlike FEED_TO_SWAP_LENGTH/FULL_LENGTH
+    (conveyor_belt.py), which also drive movement math. No simulation
+    behavior depends on either value, so they live here rather than in
+    conveyor_belt.py.
+    """
+    return CB_LENGTH * scale + 20, CB_WIDTH * scale
+
 
 PANEL_WIDTH = 500  # wide enough for the longest panel_lines() row seen so far
                     # -- "currentCommand: VacuumGripperCommandKind.MOVE_TO_SAFE_POSITION"
@@ -72,15 +74,124 @@ PANEL_SCROLLBAR_GUTTER = PANEL_SCROLLBAR_WIDTH + PANEL_SCROLLBAR_MARGIN * 2  # r
                               # strip to the right of PANEL_WIDTH -- kept separate from
                               # it so the scrollbar never overlaps the widest panel_lines()
                               # row the PANEL_WIDTH comment above sizes for
-PANEL_TOTAL_WIDTH = PANEL_WIDTH + PANEL_SCROLLBAR_GUTTER
+PANEL_TOTAL_WIDTH = PANEL_WIDTH + PANEL_SCROLLBAR_GUTTER  # SCALE-independent, so MAX_SCALE
+                              # detection below can use it before SCALE itself is known
 
-WINDOW_SIZE = (VIEWPORT_SIZE[0] + PANEL_TOTAL_WIDTH, VIEWPORT_SIZE[1])
+# Rails/margin around the belt's own inner surface (tread lines, feed/swap
+# sensor bands): proportional shares of the belt's on-screen width/height,
+# not fixed pixel amounts -- keeps the inner surface a positive,
+# SCALE-proportional size at any SCALE instead of collapsing to zero or
+# negative height the way a fixed pixel inset (previously -8/-12px in
+# ConveyorBeltVisualization.draw()) did once BELT_HEIGHT (CB_WIDTH * SCALE)
+# dropped below the fixed amount -- which happened even at the old
+# SCALE=10 default (BELT_HEIGHT=11px, minus a fixed 12px inset). Consumed
+# by ConveyorBeltVisualization.draw(); MIN_SCALE below assumes this exact
+# ratio to guarantee the sensor bands stay readable.
+BELT_WIDTH_INSET_RATIO = 0.10
+BELT_HEIGHT_INSET_RATIO = 0.30
+
+MIN_SENSOR_BAND_HEIGHT_PX = 4  # smallest on-screen height, in px, for the feed/swap
+                                # sensor bands to still read as a distinct colored strip
+                                # rather than a sliver -- drives MIN_SCALE below
+
+SCREEN_FIT_MARGIN_PX = 80  # slack reserved on each screen dimension for OS window
+                            # chrome (title bar, taskbar) when computing MAX_SCALE, so
+                            # the auto-picked window doesn't land flush against (or past)
+                            # the screen edge
+
+DEFAULT_SCALE = 10  # preferred pixels-per-model-unit, used as-is whenever it already
+                     # fits between MIN_SCALE and MAX_SCALE for the current screen
+
+# Smallest SCALE at which the feed/swap sensor bands -- height
+# BELT_HEIGHT * (1 - BELT_HEIGHT_INSET_RATIO), i.e. CB_WIDTH * SCALE * (1 -
+# BELT_HEIGHT_INSET_RATIO) -- still clear MIN_SENSOR_BAND_HEIGHT_PX. A hard
+# floor: SCALE below never gets clamped past this even if the screen can't
+# fit the resulting window, since shrinking further would make the sensors
+# unreadable regardless of what fits on screen.
+MIN_SCALE = math.ceil(MIN_SENSOR_BAND_HEIGHT_PX / (CB_WIDTH * (1 - BELT_HEIGHT_INSET_RATIO)))
+
+
+def _window_size_for_scale(scale: int) -> tuple[int, int]:
+    belt_width, belt_height = _belt_size(scale)
+    viewport_size, _ = _floor_layout(MODEL_RANGE, scale, belt_width, belt_height)
+    return viewport_size[0] + PANEL_TOTAL_WIDTH, viewport_size[1]
+
+
+def _detect_max_scale() -> int:
+    """Largest SCALE whose WINDOW_SIZE still fits the current screen
+    (minus SCREEN_FIT_MARGIN_PX on each dimension). Needs pygame's display
+    subsystem, which this module otherwise never initializes on its own --
+    it can get imported purely for class discovery (see registry.py), with
+    no display available at all (headless test/CI environments). A query
+    failure there falls back to an effectively unbounded cap rather than
+    raising, so that import path stays safe.
+    """
+    try:
+        pygame.display.init()
+        info = pygame.display.Info()
+        screen_w, screen_h = info.current_w, info.current_h
+    except pygame.error:
+        return 10_000
+    if screen_w <= 0 or screen_h <= 0:
+        return 10_000
+
+    usable_w, usable_h = screen_w - SCREEN_FIT_MARGIN_PX, screen_h - SCREEN_FIT_MARGIN_PX
+    scale = MIN_SCALE
+    while True:
+        window_w, window_h = _window_size_for_scale(scale + 1)
+        if window_w > usable_w or window_h > usable_h:
+            return scale
+        scale += 1
+
+
+MAX_SCALE = _detect_max_scale()
+
+
+def _max_scale_for_window(window_w: int, window_h: int) -> int:
+    """Largest SCALE whose WINDOW_SIZE still fits an arbitrary `window_w` x
+    `window_h` -- same search as _detect_max_scale(), but against a window
+    size handed to us directly (e.g. a live VIDEORESIZE event) instead of
+    the desktop's own resolution. No SCREEN_FIT_MARGIN_PX here -- that
+    margin is for guessing at a *desktop* size before any window exists; a
+    real window size from the OS needs no slack subtracted.
+    """
+    scale = MIN_SCALE
+    while True:
+        w, h = _window_size_for_scale(scale + 1)
+        if w > window_w or h > window_h:
+            return scale
+        scale += 1
+
+
+def _apply_scale(scale: int) -> None:
+    """(Re-)computes every SCALE-derived layout global -- SCALE itself,
+    BELT_WIDTH/BELT_HEIGHT, VIEWPORT_SIZE/ORIGIN, WINDOW_SIZE, PANEL_X, and
+    PANEL_SCROLLBAR_TRACK_RECT -- for a new `scale`. Called once below for
+    the initial layout, and again from run()'s VIDEORESIZE handling so a
+    live window resize actually re-fits the drawing (grid, belts, panel)
+    instead of stretching a fixed-size image -- SCALED alone left large
+    black letterbox bars on screens shaped differently than the app's own
+    square-viewport-plus-panel aspect ratio. Every fischertechnik_parts_visualization/
+    module reads SCALE/BELT_WIDTH/BELT_HEIGHT freshly on each draw() call
+    (via this module, not a value snapshotted at their own import time),
+    so they pick up a change here on the very next frame.
+    """
+    global SCALE, BELT_WIDTH, BELT_HEIGHT, VIEWPORT_SIZE, ORIGIN, WINDOW_SIZE, PANEL_X, PANEL_SCROLLBAR_TRACK_RECT
+    SCALE = scale
+    BELT_WIDTH, BELT_HEIGHT = _belt_size(SCALE)
+    VIEWPORT_SIZE, ORIGIN = _floor_layout(MODEL_RANGE, SCALE, BELT_WIDTH, BELT_HEIGHT)  # factory floor drawing area, excludes the attribute panel
+    WINDOW_SIZE = (VIEWPORT_SIZE[0] + PANEL_TOTAL_WIDTH, VIEWPORT_SIZE[1])
+    PANEL_X = VIEWPORT_SIZE[0]
+    PANEL_SCROLLBAR_TRACK_RECT = pygame.Rect(  # fixed until the next _apply_scale() call --
+        PANEL_X + PANEL_WIDTH + PANEL_SCROLLBAR_MARGIN, 0,  # only the thumb's position/height
+        PANEL_SCROLLBAR_WIDTH, VIEWPORT_SIZE[1])            # within it varies with scroll
+
+
 BACKGROUND_COLOR = (255, 255, 255)
 
-PANEL_X = VIEWPORT_SIZE[0]
-PANEL_SCROLLBAR_TRACK_RECT = pygame.Rect(  # fixed for the window's lifetime -- only the
-    PANEL_X + PANEL_WIDTH + PANEL_SCROLLBAR_MARGIN, 0,  # thumb's position/height within it
-    PANEL_SCROLLBAR_WIDTH, VIEWPORT_SIZE[1])            # varies with content height/scroll
+# MIN_SCALE wins over MAX_SCALE if the screen can't fit even the smallest
+# readable belt -- better an oversized window than invisible sensors.
+_apply_scale(max(MIN_SCALE, min(DEFAULT_SCALE, MAX_SCALE)))
 PANEL_BACKGROUND_COLOR = (245, 245, 245)
 PANEL_DIVIDER_COLOR = (60, 60, 60)
 PANEL_TEXT_COLOR = (20, 20, 20)
@@ -142,7 +253,6 @@ BELT_TREAD_COLOR = (70, 70, 70)      # tread ridges, running across the belt's d
 FEED_COLOR = (40, 160, 90)           # left end, in the belt's own unrotated frame: where parts enter
 SWAP_COLOR = (210, 150, 30)          # right end, in the belt's own unrotated frame: where parts exit/swap
 TREAD_SPACING = 10
-ROLLER_BAND_WIDTH = 6
 
 TOKEN_RADIUS = 8
 TOKEN_OUTLINE_COLOR = (60, 60, 60)   # ring around every token; keeps a WHITE token visible against BACKGROUND_COLOR
@@ -589,7 +699,15 @@ class FischertechnikVisualization(SimulationVisualization):
         interpreter-driven case's part-instantiation are actually deferred.
         """
         pygame.init()
-        screen = pygame.display.set_mode(WINDOW_SIZE)
+        # RESIZABLE lets the OS window be dragged/maximized. Deliberately
+        # not combined with SCALED: SCALED stretches one fixed-aspect image
+        # to fit, which left large black letterbox bars on screens shaped
+        # differently than this app's own square-viewport-plus-panel
+        # aspect ratio. Instead, VIDEORESIZE below re-fits SCALE (and every
+        # global derived from it, via _apply_scale()) to the new window
+        # size and reopens the display at that size, so the drawing itself
+        # grows/shrinks to fill the window with no padding.
+        screen = pygame.display.set_mode(WINDOW_SIZE, pygame.RESIZABLE)
         pygame.display.set_caption("Fischertechnik Factory")
         clock = pygame.time.Clock()
         font = pygame.font.SysFont(None, 18)
@@ -663,6 +781,16 @@ class FischertechnikVisualization(SimulationVisualization):
                         focused_field = None
                     elif event.unicode and _is_valid_numeric_input_char(event.unicode, current):
                         field_values[focused_field] = current + event.unicode
+                elif event.type == pygame.VIDEORESIZE:
+                    # Skip re-applying/reopening the display unless the new
+                    # window size actually crosses a SCALE step -- avoids a
+                    # redundant set_mode() (and the flicker that comes with
+                    # it) on every one of the many resize events a single
+                    # drag can fire.
+                    new_scale = _max_scale_for_window(event.w, event.h)
+                    if new_scale != SCALE:
+                        _apply_scale(new_scale)
+                        screen = pygame.display.set_mode(WINDOW_SIZE, pygame.RESIZABLE)
 
             if started:
                 model.tick()

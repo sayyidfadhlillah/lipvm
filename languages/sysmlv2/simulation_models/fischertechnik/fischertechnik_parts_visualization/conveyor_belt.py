@@ -1,10 +1,12 @@
 import pygame
 
-from languages.sysmlv2.simulation_models.fischertechnik.fischertechnik_parts.conveyor_belt import ConveyorBeltMachine, FEED_TO_SWAP_LENGTH
+from languages.sysmlv2.simulation_models.fischertechnik.fischertechnik_parts.conveyor_belt import ConveyorBeltMachine, FEED_TO_SWAP_LENGTH, CB_SENSOR_WIDTH
 from languages.sysmlv2.simulation_models.fischertechnik.fischertechnik_parts_visualization.generic import MachineVisualization
+from languages.sysmlv2.simulation_models.fischertechnik import factory_visualization as fv
 from languages.sysmlv2.simulation_models.fischertechnik.factory_visualization import (
-    BELT_WIDTH, BELT_HEIGHT, BELT_FRAME_COLOR, BELT_SURFACE_COLOR, BELT_TREAD_COLOR,
-    FEED_COLOR, SWAP_COLOR, TREAD_SPACING, ROLLER_BAND_WIDTH, SCALE, _to_screen,
+    BELT_FRAME_COLOR, BELT_SURFACE_COLOR, BELT_TREAD_COLOR,
+    FEED_COLOR, SWAP_COLOR, TREAD_SPACING, _to_screen,
+    BELT_WIDTH_INSET_RATIO, BELT_HEIGHT_INSET_RATIO,
 )
 
 
@@ -57,6 +59,12 @@ class ConveyorBeltVisualization(MachineVisualization):
         ]
 
     def draw(self, screen: pygame.Surface, machine: ConveyorBeltMachine) -> None:
+        # Read fresh off factory_visualization every frame (not imported by
+        # name above) -- both change if the window gets resized mid-session
+        # (see FischertechnikVisualization.run()'s VIDEORESIZE handling).
+        SCALE = fv.SCALE
+        BELT_WIDTH, BELT_HEIGHT = fv.BELT_WIDTH, fv.BELT_HEIGHT
+
         belt_surface = pygame.Surface((BELT_WIDTH, BELT_HEIGHT), pygame.SRCALPHA)
         rect = belt_surface.get_rect()
         pygame.draw.rect(belt_surface, BELT_FRAME_COLOR, rect, border_radius=6)
@@ -64,7 +72,13 @@ class ConveyorBeltVisualization(MachineVisualization):
         # Inset more along the height than the length: the height-inset reveals
         # the frame as rails running along the belt's long edges, while the
         # length-inset just leaves a little room around the sensor bands.
-        surface_rect = rect.inflate(-8, -12)
+        # Proportional to BELT_WIDTH/BELT_HEIGHT (see their own ratio
+        # constants in factory_visualization.py), not fixed pixel amounts --
+        # stays a positive size at any SCALE instead of collapsing to zero
+        # or negative height the way a fixed inset did.
+        width_inset = int(BELT_WIDTH * BELT_WIDTH_INSET_RATIO)
+        height_inset = int(BELT_HEIGHT * BELT_HEIGHT_INSET_RATIO)
+        surface_rect = rect.inflate(-width_inset, -height_inset)
         pygame.draw.rect(belt_surface, BELT_SURFACE_COLOR, surface_rect, border_radius=3)
 
         previous_clip = belt_surface.get_clip()
@@ -74,11 +88,12 @@ class ConveyorBeltVisualization(MachineVisualization):
         belt_surface.set_clip(previous_clip)
 
         sensor_offset_px = int(FEED_TO_SWAP_LENGTH / 2 * SCALE)
+        sensor_width_px = int(CB_SENSOR_WIDTH * SCALE)
         for sensor_x, color in (
             (rect.centerx - sensor_offset_px, FEED_COLOR),
             (rect.centerx + sensor_offset_px, SWAP_COLOR),
         ):
-            roller_rect = pygame.Rect(0, surface_rect.top, ROLLER_BAND_WIDTH, surface_rect.height)
+            roller_rect = pygame.Rect(0, surface_rect.top, sensor_width_px, surface_rect.height)
             roller_rect.centerx = sensor_x
             pygame.draw.rect(belt_surface, color, roller_rect)
 

@@ -5,10 +5,12 @@ from languages.sysmlv2.simulation_models.fischertechnik.fischertechnik_parts.sor
     SortingLineMachine, SL_LENGTH, SL_WIDTH, BELT_WIDTH as SL_BELT_WIDTH,
     SORTED_TOKEN_PLATFORM_WIDTH, SL_ZONE_LENGTH, SL_ZONE_OFFSETS, PISTON_WIDTH,
 )
+from languages.sysmlv2.simulation_models.fischertechnik.fischertechnik_parts.conveyor_belt import CB_SENSOR_WIDTH
 from languages.sysmlv2.simulation_models.fischertechnik.fischertechnik_parts_visualization.generic import MachineVisualization
+from languages.sysmlv2.simulation_models.fischertechnik import factory_visualization as fv
 from languages.sysmlv2.simulation_models.fischertechnik.factory_visualization import (
-    SCALE, _to_screen, TOKEN_COLORS, TOKEN_OUTLINE_COLOR,
-    BELT_SURFACE_COLOR, BELT_TREAD_COLOR, FEED_COLOR, TREAD_SPACING, ROLLER_BAND_WIDTH,
+    _to_screen, TOKEN_COLORS, TOKEN_OUTLINE_COLOR,
+    BELT_SURFACE_COLOR, BELT_TREAD_COLOR, FEED_COLOR, TREAD_SPACING,
 )
 
 SL_FRAME_COLOR = (90, 90, 90)        # housing outline
@@ -33,8 +35,6 @@ PISTON_RETRACTED_ROD_LENGTH_PX = 8
 # same reasoning TokenDepoVisualization's _HALF_SPAN comment gives for
 # TokenDepoMachine's one-sided receiver.
 _HALF_SPAN_Y = SL_WIDTH / 2 + SORTED_TOKEN_PLATFORM_WIDTH
-SORTING_LINE_SURFACE_WIDTH = int(SL_LENGTH * SCALE) + 20
-SORTING_LINE_SURFACE_HEIGHT = int(2 * _HALF_SPAN_Y * SCALE) + 20
 
 # Zone geometry (entry sensor + one ejector station per TokenColorKind)
 # comes from sorting_line.py itself -- SL_ZONE_OFFSETS is also what
@@ -47,13 +47,12 @@ _STATION_OFFSETS = SL_ZONE_OFFSETS[1:]
 # a fixed pixel gap narrower than the zone itself, so the four zones still
 # read as separate areas instead of touching edge to edge.
 _ZONE_GAP_PX = 8
-_ZONE_SPAN_PX = int(SL_ZONE_LENGTH * SCALE) - _ZONE_GAP_PX
 
-# Cylinder's own on-screen width (along the belt's travel axis) --
-# PISTON_WIDTH (sorting_line.py) is the pusher's real physical width,
-# previously unused here; capped at _ZONE_SPAN_PX so the cylinder never
-# visually overhangs the platform it's mounted above.
-PISTON_CYLINDER_WIDTH_PX = min(int(PISTON_WIDTH * SCALE), _ZONE_SPAN_PX)
+# SORTING_LINE_SURFACE_WIDTH/HEIGHT, _ZONE_SPAN_PX and PISTON_CYLINDER_WIDTH_PX
+# used to live here as module-level constants baked from SCALE at import
+# time; moved into draw() below since SCALE can now change mid-session on
+# a window resize (FischertechnikVisualization.run()'s VIDEORESIZE
+# handling) and these need to track it.
 
 
 class SortingLineVisualization(MachineVisualization):
@@ -89,7 +88,7 @@ class SortingLineVisualization(MachineVisualization):
     device, only the numbers above this class need to change.
 
     The entry sensor is the one exception: drawn at conveyor-belt scale
-    (ROLLER_BAND_WIDTH, same as ConveyorBeltVisualization's own FEED/SWAP
+    (CB_SENSOR_WIDTH, same as ConveyorBeltVisualization's own FEED/SWAP
     bands) rather than filling its whole zone, since it's a point sensor,
     not an ejector needing a platform. The rest of its zone is left as
     plain belt -- a transport stretch a token rides over without belonging
@@ -120,7 +119,16 @@ class SortingLineVisualization(MachineVisualization):
         ]
 
     def draw(self, screen: pygame.Surface, machine: SortingLineMachine) -> None:
-        surface = pygame.Surface((SORTING_LINE_SURFACE_WIDTH, SORTING_LINE_SURFACE_HEIGHT), pygame.SRCALPHA)
+        SCALE = fv.SCALE
+        surface_width = int(SL_LENGTH * SCALE) + 20
+        surface_height = int(2 * _HALF_SPAN_Y * SCALE) + 20
+        zone_span_px = int(SL_ZONE_LENGTH * SCALE) - _ZONE_GAP_PX
+        # PISTON_WIDTH (sorting_line.py) is the pusher's real physical width;
+        # capped at zone_span_px so the cylinder never visually overhangs
+        # the platform it's mounted above.
+        piston_cylinder_width_px = min(int(PISTON_WIDTH * SCALE), zone_span_px)
+
+        surface = pygame.Surface((surface_width, surface_height), pygame.SRCALPHA)
         center = surface.get_rect().center
 
         housing_rect = pygame.Rect(0, 0, int(SL_LENGTH * SCALE), int(SL_WIDTH * SCALE))
@@ -138,17 +146,17 @@ class SortingLineVisualization(MachineVisualization):
             pygame.draw.line(surface, BELT_TREAD_COLOR, (x, belt_rect.top), (x, belt_rect.bottom), 2)
         surface.set_clip(previous_clip)
 
-        # Sized like a conveyor belt's own sensor band (ROLLER_BAND_WIDTH),
+        # Sized like a conveyor belt's own sensor band (CB_SENSOR_WIDTH),
         # not the full width of its zone -- the rest of that zone is left as
         # plain belt, a transport stretch that isn't owned by any sensor.
-        in_sensor_rect = pygame.Rect(0, 0, ROLLER_BAND_WIDTH, belt_rect.height)
+        in_sensor_rect = pygame.Rect(0, 0, int(CB_SENSOR_WIDTH * SCALE), belt_rect.height)
         in_sensor_rect.center = (center[0] + int(_IN_SENSOR_OFFSET * SCALE), center[1])
         pygame.draw.rect(surface, FEED_COLOR, in_sensor_rect)
 
         for color, offset in zip(TokenColorKind, _STATION_OFFSETS):
             station_x = center[0] + int(offset * SCALE)
 
-            platform_rect = pygame.Rect(0, 0, _ZONE_SPAN_PX, int(SORTED_TOKEN_PLATFORM_WIDTH * SCALE))
+            platform_rect = pygame.Rect(0, 0, zone_span_px, int(SORTED_TOKEN_PLATFORM_WIDTH * SCALE))
             platform_rect.midbottom = (station_x, housing_rect.top)
             pygame.draw.rect(surface, TOKEN_COLORS[color], platform_rect, border_radius=3)
             pygame.draw.rect(surface, TOKEN_OUTLINE_COLOR, platform_rect, width=2, border_radius=3)
@@ -156,7 +164,7 @@ class SortingLineVisualization(MachineVisualization):
             # Cylinder: fixed mounting block inside the housing, between
             # the belt's own edge and the housing wall -- never moves,
             # regardless of piston state.
-            cylinder_rect = pygame.Rect(0, 0, PISTON_CYLINDER_WIDTH_PX, belt_rect.top - housing_rect.top)
+            cylinder_rect = pygame.Rect(0, 0, piston_cylinder_width_px, belt_rect.top - housing_rect.top)
             cylinder_rect.centerx = station_x
             cylinder_rect.top = housing_rect.top
             pygame.draw.rect(surface, PISTON_COLOR, cylinder_rect)
