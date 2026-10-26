@@ -172,7 +172,8 @@ def test_token_producer_platform_sensor_edge(lipvm_based_sysml_interpreter):
         ("TokenProducerSuccessEventMessage", tp_qualified_name),
         ("TokenPlatformBusyEventMessage", tp_qualified_name),
     ]
-    factory.staged_snapshot = {tp_qualified_name: types.SimpleNamespace(platformSens=True)}
+    factory.staged_snapshot = {tp_qualified_name: types.SimpleNamespace(
+        platformSens=True, currentCommand=None, lastUsedTokenColor=None, placementCoordinate=None)}
     wait_platform_free_state = (
         "TokenProducerSystem::TokenProducerStates::TokenProducerSimpleMission::WaitPlatformFree"
     )
@@ -234,7 +235,8 @@ def test_token_producer_to_feeder_conveyor_transport(lipvm_based_sysml_interpret
 
     # When: the simulation reports the token producer's platform sensor as
     # busy -- a token is now available on tokenProd's platform.
-    factory.staged_snapshot = {tp_qualified_name: types.SimpleNamespace(platformSens=True)}
+    factory.staged_snapshot = {tp_qualified_name: types.SimpleNamespace(
+        platformSens=True, currentCommand=None, lastUsedTokenColor=None, placementCoordinate=None)}
 
     # Then: vgrProdToFeed's Idle guard fires -- it picks up from
     # pickFromProducerPosition (`do vgr.pick { in targetPosition =

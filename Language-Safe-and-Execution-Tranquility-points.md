@@ -933,6 +933,241 @@ linking runtime records back to AST nodes.
 
 ---
 
+# Topic 12 — Evaluating tranquility, and where part attribute values come from
+
+## Context: the implementation steps
+
+The prototype is built in steps, each test-first (`tests/test_sysmlv2_tranquility.py`):
+
+1. **Recognise** `#Tranquility` constraints (`_is_tranquility_constraint` in
+   `syntax.py`; `LiveModeling::Tranquility` no longer registered as an item def).
+   Done.
+2. **Store** each part def's conditions on its runtime record: the abstract
+   runtime class `TranquilityHolder` (`runtime.py`) holds `tranquility_conditions`,
+   `PartDef` extends it, and `PartDefinition.visit` builds the conditions with the
+   existing `_build_expression`. Done.
+3. **Evaluate** the conditions for one part instance: "is `Main::tokenDepo`
+   tranquil right now?". Tests written, not implemented.
+4. **Connect** tranquility to updates (Topics 9, 10).
+
+## Step 3 decisions
+
+- **Entry point:** `part_def.is_tranquil(part_instantiation, runtime)` on the
+  part's `rt.PartDef` (via `TranquilityHolder`).
+- **Passing the current part:** `Value.evaluate(runtime)` takes no instance
+  parameter; other context already lives on `runtime.execution_context` (an
+  `ExecutionContext` runtime element holding the current state machine). The
+  check puts the part into that context for its duration (e.g.
+  `execution_context.current_part`) rather than adding an instance parameter to
+  every `Value` subclass. A bare attribute name in a condition, built as a
+  `ReferenceValue` tagged `AttributeUsage` (e.g. `platformSens`), resolves
+  against that part.
+- **Several conditions on one part def:** all must hold.
+- **Part not yet in the simulation** (startup: the simulation has not created
+  it yet): the check answers **not tranquil** rather than raising. Tranquility
+  cannot be confirmed yet; a later check gives a real answer.
+- **Part def without conditions** (e.g. `ConveyorBeltMachine`): not covered by
+  step 3; the default is decided in step 4.
+
+## Where attribute values come from today
+
+- The runtime record of a part usage, `rt.PartInstantiation`, holds **no live
+  attribute values**.
+- Each VM round, `Namespace.read_events_and_execute` (`syntax.py`) loops over
+  every `PartInstantiation` and calls `evaluate()`, which only makes sure the
+  part **exists** in the simulation (`SimulationBridge.instantiate(...)`,
+  idempotent). Then `drain_event_queue(...)` delivers the simulation's events to
+  the state machines' mailboxes, then the state machines run.
+- The only snapshot refresh is `ExecutionContext.begin()` (`runtime.py`), at the
+  start of **each state machine's pass**: it stores
+  `channel.latest_snapshot.read()` in `execution_context.current_snapshot`.
+- `AttributeReference.evaluate` (`runtime.py`), used by `accept when`
+  conditions, reads attributes from that stored snapshot through
+  `SimulationBridge.read_attribute_from_snapshot(...)`.
+
+Consequence: two state machines in the same round can see different moments if
+the simulation publishes between their passes.
+
+Implementing step 3 on this design would require: capturing one snapshot per
+check and passing it along (to avoid reading different moments within one
+compound condition), handling `PartNotReadyError` during evaluation, sharing one
+snapshot across several parts once updates check them together (Topic 9), and
+teaching `ReferenceValue` to read through `SimulationBridge`.
+
+## models@runtime design: part values on the part instantiations
+
+1. **`Value.evaluate()` reads values from the runtime element instances**, the
+   `PartInstantiation`s in the lookup table, not through `SimulationBridge`. In
+   models@runtime terms, the registry becomes a runtime model causally connected
+   to the simulated system.
+2. **A per-round refresh copies the simulation's values onto the
+   `PartInstantiation`s**, following the pattern of `drain_event_queue`:
+
+   | | `drain_event_queue` (exists) | Refreshing part values (new) |
+   |---|---|---|
+   | Called from | `read_events_and_execute`, once per round | The same place, once per round |
+   | Reads from the channel | `channel.event_queue` | `channel.latest_snapshot.read()`, **once** per round |
+   | Resolves against the registry | Event name → `ItemDef` | Part qualified name → `PartInstantiation` |
+   | Writes into registry records | `ExecutableStateUsage.pending` | The part instance's attribute values |
+
+   Only the interpreter thread writes the registry; the simulation thread only
+   publishes to the channel, as with events.
+
+   ```python
+   def refresh_part_values(channel, part_instantiations) -> None:
+       snapshot = channel.latest_snapshot.read()          # one moment for the whole round
+       for part in part_instantiations:
+           if snapshot is None or part.qualified_name not in snapshot:
+               continue                                    # not created in the simulation yet
+           live = snapshot[part.qualified_name]
+           part.observed_values = {name: getattr(live, name) for name in <its part def's declared attributes>}
+   ```
+
+3. **Placement:** in `read_events_and_execute`, **after** `drain_event_queue` and
+   **before** the state machines run. The event queue and the snapshot are
+   separate channels with no ordering guarantee; this placement means machines
+   react to events while seeing values at least as recent as those events.
+
+Differences from draining events:
+
+- **A copy, not a drain.** Events are consumed once; a snapshot is state. The
+  refresh overwrites previous values with the latest; if nothing new was
+  published, they stay the same.
+- **A part missing from the snapshot is normal at startup.** It keeps no values,
+  without a warning; for tranquility it is not tranquil.
+- **Only the attributes the part def declares in SysML are copied**
+  (`rt.PartDef.attributes`). If the snapshot lacks a declared attribute, the
+  refresh **raises**, as the simulation side's `PartSimulationModel.snapshot()`
+  already fails loudly on a missing field.
+
+**The SysML part def is the interface.** Its declared attributes are what the
+model, and therefore `when` and tranquility conditions, can see. A simulation's
+snapshot may hold **more** (physics values, timers, debug fields: internals the
+interpreter never sees), never **less**. Checked against
+`complete-interesting-simulation` and the Fischertechnik simulation models'
+`snapshot_type` dataclasses: `TokenProducerMachine` (4 attributes),
+`TokenDepoMachine` (4), `ConveyorBeltMachine` (8) and `VacuumGripperMachine` (11)
+match exactly, nothing missing and nothing extra, so raising on a missing
+attribute does not break existing runs. (`Machine` has no simulation model; it is
+only the abstract base.)
+
+**Behaviour change for `when` conditions** once they read the copied values:
+today each state machine captures its own snapshot; with one refresh per round,
+all machines in a round see the **same** values. More consistent, but a semantic
+change that existing DT-simulation tests may notice. `ExecutionContext.begin()`
+would no longer need to capture a snapshot.
+
+## Order: models@runtime first, then step 3
+
+- **Step 3 first, on the current design:** step 3 handles all the snapshot
+  plumbing listed above; switching to models@runtime later rewrites the same
+  read path and the step-3 tests again.
+- **models@runtime first:** a self-contained change (one refresh function, one
+  call, a field on `PartInstantiation`). Step 3 then shrinks: a bare attribute
+  reads the current part's values, and "not in the simulation yet" means "no
+  values yet". Step-3 tests set the part's values directly instead of publishing
+  snapshots.
+
+Decided: **models@runtime first, split in two parts**:
+
+- **Part A, add the values:** the per-round refresh onto the
+  `PartInstantiation`s. Nothing existing reads them yet, so `when` conditions
+  keep reading the snapshot and **nothing existing changes behaviour**.
+- **Part B, switch the readers:** `AttributeReference` (`when` conditions) reads
+  the copied values instead of the snapshot. Done later, as its own change,
+  since it causes the behaviour change above.
+
+Sequence: **Part A → step 3 (tranquility reads the copied values) → Part B**.
+Until Part B, `when` conditions read the snapshot while tranquility reads the
+copied values, so within one round they may see slightly different moments;
+acceptable for the prototype.
+
+## Representation of the copied values: a mirror, separate from configuration
+
+The copied values are a **mirror**: each round they reflect what the simulation
+published, and the interpreter only reads them.
+
+**Not in `attribute_redefinitions`.** A part instantiation's
+`attribute_redefinitions` hold what the **model says** at a part usage (the `:>>`
+redefinitions in `Main`, e.g. `tokenDepo`'s `placementCoordinate`): *configured*
+values, flowing registry → simulation at instantiation, and changed by Topic 10's
+`RedefineAttributeValue` update. Mirroring into them would be wrong:
+
+1. They only cover redefined attributes (`tokenDepo` redefines
+   `placementCoordinate` only; there is nothing for `receiverSens`).
+2. Mirroring would overwrite the configuration every round. The configured value
+   ("where the model says the part is") and the observed one ("where the
+   simulation says it is now") can differ, e.g. while a `RedefineAttributeValue`
+   update waits for tranquility.
+3. It conflates model and state: a redefinition is a statement in the model, an
+   observation is a fact about the running system. models@runtime needs both.
+
+**Options for a separate mirror:**
+
+- **Plain Python dict** on `PartInstantiation` (e.g. `observed_values`). Fits how
+  evaluation already works: `LiteralValue` stores a string and converts it to a
+  Python `bool`/`int`/`float` at evaluation, precisely to compare against live
+  Python values; `BinaryExpression` compares Python values; the snapshot already
+  holds Python values, including Python enums, which enum literals in conditions
+  already resolve to. Precedent: `ExecutionContext` keeps plain Python attributes
+  on a runtime element. Not part of the pyecore model: invisible to reflection
+  and not serialisable to XMI.
+- **Reflective pyecore mirror**: e.g. an `ObservedAttribute` record (name plus a
+  contained `Value`) in a `PartInstantiation.observed_attributes` containment,
+  created on the first refresh and updated in place afterwards. Scalars as
+  `LiteralValue`, structured values as `CompositeCustomValue`; enums need a new
+  representation (`ScalarType` has no enum kind).
+
+**Runtime cost is not a deciding factor.** Measured at this model's size (7 part
+instances, 57 declared attributes): refreshing the dict takes about 2.6 µs per
+round and the in-place pyecore mirror about 117 µs; one read about 0.04 µs vs.
+0.43 µs. The Fischertechnik visualisation ticks at 60 fps (16.7 ms per tick), so
+even the pyecore mirror uses under 1 % of a tick. The real difference is
+implementation effort: a one-line copy vs. a new class, value conversions both
+ways, and an enum representation.
+
+**XMI reflection needs more than the mirror.** Saving the runtime registry
+(`vm.state.sysml`) to XMI after the build pass "succeeds", but writes only the
+lookup tables' skeleton: all 70 records have an empty `element_type`, and no
+`PartDef`, `PartInstantiation`, attribute redefinition or tranquility condition
+appears. `Record.element_type` is `containment=False`, so the registry's elements
+are referenced by the lookup tables but contained by nothing. Reflecting the
+runtime model to XMI therefore also requires:
+
+1. registry containment: the elements contained somewhere (e.g.
+   `Record.element_type` as a containment, if each element is registered in
+   exactly one table, or a dedicated container);
+2. the AST resource saved in the same resource set, so runtime records'
+   references to AST nodes (`definition`) serialise;
+3. no plain Python attributes for anything that must be saved (this also applies
+   to `ExecutionContext`).
+
+**Decided: plain dict now, reflective mirror later.** Tranquility only needs to
+read current values at the moment of a check; nothing in steps 3–4 saves, reloads
+or inspects the runtime model as XMI. To keep the later switch cheap:
+
+1. **One accessor.** All readers (tranquility now, `AttributeReference` in
+   Part B) go through `PartInstantiation.observed_value(name)`, never the dict.
+   Switching representation then changes only the refresh and that method.
+2. **Tests go through the refresh.** Tests publish a snapshot and call the
+   refresh, rather than writing the dict directly, so they also test the refresh
+   and work unchanged with either representation.
+3. **Recorded debt:** reflective pyecore mirror plus the registry containment fix
+   (points 1–3 above), when XMI reflection of the runtime model becomes a goal.
+
+## Open points
+
+- Keeping *observed* values (simulation → registry, every round) clearly separate
+  from *configured* ones (attribute redefinitions, registry → simulation at
+  instantiation and through the `set_attribute` command of Topic 10), so writing
+  an observed value is never mistaken for controlling the machine. The separate
+  dict and accessor already keep them apart structurally; naming and
+  documentation should make it explicit.
+- The step-3 tests currently publish a snapshot and call `is_tranquil` directly;
+  they must also call the refresh (decision point 2 above).
+
+---
+
 ## Status
 
 - Two-layer model (language safe point + execution tranquility point, plus
@@ -970,4 +1205,12 @@ linking runtime records back to AST nodes.
   interface to language engineers, who provide a construct to modellers. Exact
   core interface, discussion with Valentin, and sequencing with steps 2–3:
   **open**.
+- Evaluation and attribute values (Topic 12): steps 1–2 **done**; step 3 tests
+  **written, not implemented**. **Decided:** models@runtime first, as Part A
+  (per-round refresh of part values) → step 3 → Part B (`when` conditions read
+  the copied values). **Decided:** copied values as a plain dict behind
+  `PartInstantiation.observed_value(name)`, tests going through the refresh.
+  **Debt:** reflective pyecore mirror plus registry containment fix when XMI
+  reflection of the runtime model is needed (today the registry saves to XMI
+  as an empty skeleton).
 - No code changes made.

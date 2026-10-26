@@ -1021,6 +1021,10 @@ endif
 
             drain_event_queue(runtime.channel, runtime.sysml.lookup_table_item_defs, executable_stats)
 
+            # After draining events, before the state machines run: they react
+            # to this round's events while seeing values at least as recent.
+            refresh_part_values(runtime.channel, runtime.sysml.lookup_table_part_defs, part_instantiation_elements)
+
         return lazy_loop(executable_stats, lambda element, runtime: element.evaluate(runtime), args=(runtime,))
 
     def evaluate(self, runtime: RuntimeState):
@@ -1100,6 +1104,40 @@ def drain_event_queue(channel, item_defs_table, executable_stats) -> None:
         occurrence = rt.EventOccurrence(event_type=record.element_type, source=source)
         for usage in executable_stats:
             usage.pending.append(occurrence)
+
+
+def refresh_part_values(channel, part_defs_table, part_instantiations) -> None:
+    """Copies the simulation's latest published values onto each
+    PartInstantiation's observed_values -- same shape as drain_event_queue()
+    above (read from the channel, resolve against the registry, write into
+    registry records), but a copy rather than a drain: a snapshot is state,
+    so each refresh simply overwrites the previous values.
+
+    The snapshot is read once, so every part reflects the same moment for the
+    whole round. A part not in it yet (the simulation hasn't created it) is
+    skipped and keeps whatever it had, None at startup. Only the attributes
+    the part's PartDef declares in SysML are copied: the SysML part def is
+    the interface, so extra simulation-side fields are ignored, and a missing
+    declared one raises AttributeError (the simulation doesn't fulfil the
+    interface), as PartSimulationModel.snapshot() does on its own side. See
+    Language-Safe-and-Execution-Tranquility-points.md, Topic 12.
+    """
+    snapshot = channel.latest_snapshot.read()
+    if snapshot is None:
+        return
+    for part in part_instantiations:
+        if part.qualified_name not in snapshot:
+            continue
+        record = part_defs_table.get_reference(part.part_def_origin.qualified_name)
+        if record is None:
+            raise LookupError(
+                f"{part.qualified_name!r} is typed by {part.part_def_origin.qualified_name!r}, "
+                f"which isn't a registered PartDef.")
+        live = snapshot[part.qualified_name]
+        part.observed_values = {
+            attribute.name: getattr(live, attribute.name)
+            for attribute in record.element_type.attributes
+        }
 
 class DerivedRelatedelement(EDerivedCollection):
     pass

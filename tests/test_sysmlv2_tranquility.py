@@ -8,6 +8,8 @@ until it exists that test fails on its own rather than the whole module
 failing to collect.
 """
 
+import types
+
 from core.language import Scenario
 from core.vm import VirtualMachine
 
@@ -118,3 +120,38 @@ def test_part_defs_carry_their_tranquility_condition():
 def test_part_def_without_tranquility_constraint_has_no_condition():
     part_def = _part_def(_build(), "ConveyorBeltSystem::ConveyorBelt::ConveyorBeltMachine")
     assert list(part_def.tranquility_conditions) == []
+
+
+# --- Step 3: evaluating tranquility for a part instance ---
+
+def _is_tranquil(vm: VirtualMachine, part_usage: str, **attributes) -> bool:
+    """Publishes a snapshot in which `part_usage` has exactly `attributes`
+    (standing in for the simulation), then asks its part def whether that
+    part instance is tranquil."""
+    vm.state.channel.latest_snapshot.publish({part_usage: types.SimpleNamespace(**attributes)})
+    part = vm.state.sysml.lookup_table_part_instantiations.get_reference(part_usage).element_type
+    return _part_def(vm, part.part_def_origin.qualified_name).is_tranquil(part, vm.state)
+
+
+def test_token_depo_is_tranquil_when_no_token_at_receiver():
+    vm = _build()
+    assert _is_tranquil(vm, "Main::tokenDepo", receiverSens=False) is True
+    assert _is_tranquil(vm, "Main::tokenDepo", receiverSens=True) is False
+
+
+def test_vgr_is_tranquil_only_at_home_with_vacuum_off():
+    vm = _build()
+    at_home = dict(verticalEncoder=0.0, armEncoder=0.0, rotEncoder=0.0,
+                   vacuumActCompressorOn=False, vacuumActValve=False)
+    assert _is_tranquil(vm, "Main::vgrPickProducer", **at_home) is True
+    assert _is_tranquil(vm, "Main::vgrPickProducer", **{**at_home, "armEncoder": 31.5}) is False
+    assert _is_tranquil(vm, "Main::vgrPickProducer", **{**at_home, "vacuumActValve": True}) is False
+
+
+def test_part_missing_from_snapshot_is_not_tranquil():
+    # Startup: the simulation hasn't created the part yet (PartNotReadyError),
+    # so tranquility can't be confirmed.
+    vm = _build()
+    vm.state.channel.latest_snapshot.publish({})
+    part = vm.state.sysml.lookup_table_part_instantiations.get_reference("Main::tokenDepo").element_type
+    assert _part_def(vm, part.part_def_origin.qualified_name).is_tranquil(part, vm.state) is False

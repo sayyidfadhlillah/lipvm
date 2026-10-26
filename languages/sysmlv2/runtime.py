@@ -985,6 +985,29 @@ class PartInstantiation(ElementDefinition, metaclass=MetaEClass):
     # override).
     attribute_redefinitions = EReference(eType=AttributeRedefinition, lower=0, upper=-1, containment=True)
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Mirror of the simulation's latest values for this part's declared
+        # attributes (name -> plain Python value), set each VM round by
+        # refresh_part_values() (syntax.py); None until the simulation has
+        # published this part. Observed state, kept apart from the configured
+        # attribute_redefinitions above. A plain dict for now, not part of the
+        # pyecore model (see Language-Safe-and-Execution-Tranquility-points.md,
+        # Topic 12); read it only through observed_value().
+        self.observed_values = None
+
+    def observed_value(self, name: str):
+        """The latest value the simulation published for this part's
+        declared attribute `name`. Raises PartNotReadyError while the
+        simulation hasn't published this part yet (the same startup signal
+        AttributeReference's snapshot reads raise).
+        """
+        if self.observed_values is None:
+            raise PartNotReadyError(
+                f"{self.qualified_name!r} has no observed values yet -- the simulation "
+                f"hasn't published it, so {name!r} can't be read.")
+        return self.observed_values[name]
+
     def evaluate(self, runtime: RuntimeState):
         """Ensures this usage's live simulation counterpart exists, via
         SimulationBridge -- idempotency is entirely the bridge's
