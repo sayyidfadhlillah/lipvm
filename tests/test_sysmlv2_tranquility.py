@@ -10,6 +10,8 @@ failing to collect.
 
 import types
 
+import pytest
+
 from core.language import Scenario
 from core.vm import VirtualMachine
 
@@ -124,34 +126,83 @@ def test_part_def_without_tranquility_constraint_has_no_condition():
 
 # --- Step 3: evaluating tranquility for a part instance ---
 
-def _is_tranquil(vm: VirtualMachine, part_usage: str, **attributes) -> bool:
-    """Publishes a snapshot in which `part_usage` has exactly `attributes`
-    (standing in for the simulation), then asks its part def whether that
-    part instance is tranquil."""
-    vm.state.channel.latest_snapshot.publish({part_usage: types.SimpleNamespace(**attributes)})
+TOKEN_DEPO = "Main::tokenDepo"
+VGR = "Main::vgrPickProducer"
+
+
+def _token_depo_values(**overrides) -> types.SimpleNamespace:
+    """A complete simulation-side value object for a TokenDepoMachine: every
+    attribute the part def declares in SysML."""
+    values = dict(tokenCount=0, receiverSens=False, currentCommand=None, placementCoordinate=None)
+    values.update(overrides)
+    return types.SimpleNamespace(**values)
+
+
+def _vgr_values(**overrides) -> types.SimpleNamespace:
+    """A complete simulation-side value object for a VacuumGripperMachine,
+    at home with the vacuum off unless overridden."""
+    values = dict(currentCommand=None, executionStatus=None,
+                  verticalEncoder=0.0, armEncoder=0.0, rotEncoder=0.0,
+                  expectedVerticalEncoderValue=0.0, expectedArmEncoderValue=0.0,
+                  expectedRotationEncoderValue=0.0,
+                  vacuumActCompressorOn=False, vacuumActValve=False, placementCoordinate=None)
+    values.update(overrides)
+    return types.SimpleNamespace(**values)
+
+
+def _publish_and_refresh(vm: VirtualMachine, snapshot: dict) -> None:
+    """Stand in for the simulation publishing `snapshot`, then refresh the
+    part instantiations' observed values from it."""
+    vm.state.channel.latest_snapshot.publish(snapshot)
+    syntax.refresh_part_values(
+        vm.state.channel,
+        vm.state.sysml.lookup_table_part_defs,
+        syntax.part_instantiations(vm.state.sysml.lookup_table_part_instantiations))
+
+
+def _is_tranquil(vm: VirtualMachine, part_usage: str) -> bool:
+    """Asks the part's part def whether that part instance is tranquil now."""
     part = vm.state.sysml.lookup_table_part_instantiations.get_reference(part_usage).element_type
     return _part_def(vm, part.part_def_origin.qualified_name).is_tranquil(part, vm.state)
 
 
 def test_token_depo_is_tranquil_when_no_token_at_receiver():
     vm = _build()
-    assert _is_tranquil(vm, "Main::tokenDepo", receiverSens=False) is True
-    assert _is_tranquil(vm, "Main::tokenDepo", receiverSens=True) is False
+    _publish_and_refresh(vm, {TOKEN_DEPO: _token_depo_values(receiverSens=False)})
+    assert _is_tranquil(vm, TOKEN_DEPO) is True
+    _publish_and_refresh(vm, {TOKEN_DEPO: _token_depo_values(receiverSens=True)})
+    assert _is_tranquil(vm, TOKEN_DEPO) is False
+
+
+def test_evaluation_leaves_no_current_part_behind():
+    # The part is only the evaluation context for the duration of the check.
+    vm = _build()
+    _publish_and_refresh(vm, {TOKEN_DEPO: _token_depo_values()})
+    _is_tranquil(vm, TOKEN_DEPO)
+    assert vm.state.execution_context.current_part is None
 
 
 def test_vgr_is_tranquil_only_at_home_with_vacuum_off():
     vm = _build()
-    at_home = dict(verticalEncoder=0.0, armEncoder=0.0, rotEncoder=0.0,
-                   vacuumActCompressorOn=False, vacuumActValve=False)
-    assert _is_tranquil(vm, "Main::vgrPickProducer", **at_home) is True
-    assert _is_tranquil(vm, "Main::vgrPickProducer", **{**at_home, "armEncoder": 31.5}) is False
-    assert _is_tranquil(vm, "Main::vgrPickProducer", **{**at_home, "vacuumActValve": True}) is False
+    _publish_and_refresh(vm, {VGR: _vgr_values()})
+    assert _is_tranquil(vm, VGR) is True
+    _publish_and_refresh(vm, {VGR: _vgr_values(armEncoder=31.5)})
+    assert _is_tranquil(vm, VGR) is False
+    _publish_and_refresh(vm, {VGR: _vgr_values(vacuumActValve=True)})
+    assert _is_tranquil(vm, VGR) is False
 
 
 def test_part_missing_from_snapshot_is_not_tranquil():
-    # Startup: the simulation hasn't created the part yet (PartNotReadyError),
-    # so tranquility can't be confirmed.
+    # Startup: the simulation hasn't created the part yet, so it has no
+    # observed values and tranquility can't be confirmed.
     vm = _build()
-    vm.state.channel.latest_snapshot.publish({})
-    part = vm.state.sysml.lookup_table_part_instantiations.get_reference("Main::tokenDepo").element_type
-    assert _part_def(vm, part.part_def_origin.qualified_name).is_tranquil(part, vm.state) is False
+    _publish_and_refresh(vm, {})
+    assert _is_tranquil(vm, TOKEN_DEPO) is False
+
+
+def test_part_def_without_tranquility_conditions_raises():
+    # Proposal, pending the step-4 decision on a default (always tranquil,
+    # never tranquil, or error): refuse to answer rather than pick one silently.
+    vm = _build()
+    with pytest.raises(ValueError, match="no tranquility conditions"):
+        _is_tranquil(vm, "Main::cbFeeder")
