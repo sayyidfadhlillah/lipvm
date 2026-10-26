@@ -106,6 +106,17 @@ def _is_tranquility_constraint(node):
     )
 
 
+def _tranquility_condition(constraint):
+    """Builds the runtime Value tree for a #Tranquility constraint's Boolean
+    expression (its ResultExpressionMembership), with the same
+    _build_expression used for `accept when` conditions. Raises if the
+    constraint has no expression, rather than storing an empty condition.
+    """
+    for expression in _owned_by_kind(constraint, ResultExpressionMembership):
+        return _build_expression(expression)
+    raise ValueError(f"#Tranquility constraint {qualified_name(constraint)} has no expression.")
+
+
 def _resolve_feature_reference(node):
     """Resolves a FeatureReferenceExpression — SysML's own construct for "this
     value is another Feature" (e.g. conveyorBelt=cb1) — to a bare Reference
@@ -7565,6 +7576,11 @@ specializesFromLibrary('Parts::Part')"""
                 feature.to_actual_action()
                 for feature in _owned_by_kind(self, FeatureMembership)
                 if isinstance(feature, ActionUsage)
+            ],
+            tranquility_conditions=[
+                _tranquility_condition(feature)
+                for feature in _owned_by_kind(self, FeatureMembership)
+                if _is_tranquility_constraint(feature)
             ],
         )
         parent.add_part_def(part_def)

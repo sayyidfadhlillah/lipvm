@@ -270,6 +270,15 @@ class BinaryExpression(Value):
         right = self.right.evaluate(runtime)
         return _BINARY_OPERATORS[self.operator](left, right)
 
+class TranquilityHolder(RuntimeStateElement, metaclass=MetaEClass):
+    """An abstract class for runtime records that can carry tranquility
+    conditions: the built expressions of the #Tranquility constraints a
+    modeller wrote on the corresponding AST element (see
+    Language-Safe-and-Execution-Tranquility-points.md, Topic 11). A hot update
+    may only be applied while they hold. Extended by PartDef for now.
+    """
+    tranquility_conditions = EReference(eType=Value, lower=0, upper=-1, containment=True)
+
 class Record(ElementDefinition, metaclass=MetaEClass):
     element_type = EReference(eType=ElementDefinition, lower=1, upper=1, containment=False)
 
@@ -871,7 +880,7 @@ class ExecutableStateUsage(ElementDefinition, metaclass=MetaEClass):
         if target_state.entry is not None:
             target_state.entry.evaluate(runtime)
 
-class PartDef(ElementDefinition, metaclass=MetaEClass):
+class PartDef(ElementDefinition, TranquilityHolder, metaclass=MetaEClass):
 
     contained_perform_actions = EReference(eType=ActualAction, lower=0, upper=-1, containment=True)
     attributes = EReference(eType=AttributeUsageElement, lower=0, upper=-1, containment=True)

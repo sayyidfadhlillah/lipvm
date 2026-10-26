@@ -660,6 +660,279 @@ a substate.
 
 ---
 
+# Topic 9 — Selective tranquility per update, and incremental vs. atomic application
+
+## Selective tranquility
+
+Idea: rather than requiring every part to be tranquil for every update, the
+**update's own edits decide which tranquility constraints matter**. If an update
+only changes something in `TokenDepoMachine`, only `TokenDepoMachine`'s
+`#Tranquility` constraint is checked; the VGR may be mid-grip.
+
+Sketch, with the `Update` infrastructure from commit `49bbac0`:
+
+1. Collect the AST nodes the update affects.
+2. For each, walk up the containment tree to the enclosing `part def` and take
+   its `#Tranquility` constraints.
+3. Apply the update only when those constraints hold, for the instances of the
+   affected part defs.
+
+Scope for now: **part defs only**. Edits outside a part def (a `state def`, a
+part usage, a shared enum) are left for later. How an update states which AST
+nodes it affects is Topic 10.
+
+## Incremental per-instance application and consistency
+
+Initial idea: apply an update **incrementally**, to each instance as soon as that
+instance becomes tranquil. Example: `TokenDepoMachine` has instances `depo1` and
+`depo2`; `depo1` becomes tranquil and is updated while `depo2` is still busy.
+This raises serious consistency problems:
+
+1. **Two versions of one definition run at once.** All instances currently share
+   one `rt.PartDef` record. Updating only `depo1` requires instances to point to
+   different versions of their definition, which the registry does not support:
+   a significant new mechanism.
+2. **Old and new versions interact.** If the update changes how the part
+   communicates (new or reinterpreted events, a changed action), the state
+   machines and parts that talk to both depots see two behaviours at once, e.g.
+   a VGR protocol written for the old version talking to a new-version depot.
+   This is the core concern in the literature: Kramer & Magee's quiescence and
+   Vandewoude's condition 4 exist to prevent an interaction from seeing a mix of
+   versions. Ma et al. name the property **version consistency** ("Version-
+   consistent Dynamic Reconfiguration of Component-based Distributed Systems",
+   ESEC/FSE 2011): a transaction sees either all old or all new versions, never a
+   mix.
+3. **It may never finish.** If `depo2` never becomes tranquil, the system stays
+   mixed indefinitely; a timeout or fallback policy is needed.
+4. **No clean rollback.** If something fails partway, `depo1` is updated and
+   `depo2` is not, with no single consistent state to return to.
+5. **Behaviour depends on timing.** Which instance updates first depends on when
+   each happens to become tranquil, making runs hard to reproduce and test.
+
+**Atomic alternative:** wait until *all* instances of the affected part def are
+tranquil at the same moment, then update them together. Consistent, but may wait
+a long time.
+
+**Middle ground:** the update declares its kind:
+
+- *instance-local* changes (not affecting interactions, e.g. a threshold the part
+  only uses internally) may be applied incrementally;
+- *interaction-affecting* changes must be applied atomically.
+
+This still needs version support in the registry for the incremental kind.
+
+Suggested starting point: **atomic**, with incremental application as a later
+extension. Not yet decided.
+
+---
+
+# Topic 10 — What an update targets, and construct-level SysMLv2 updates
+
+Selective tranquility (Topic 9) needs to know, *before* applying an update,
+which part defs it affects. This topic records what the current infrastructure
+offers, and the direction for SysMLv2 update classes.
+
+## Edit scripts cannot target a SysMLv2 model today
+
+Checked on `tests/complete-interesting-simulation.xmi`:
+
+1. **Every node has the same identifier.** An `EditSyntaxOperation` finds its
+   target node by the integer `AbstractSyntaxElement.identifier`. The SysMLv2
+   loader never sets it: all 2143 nodes have `identifier = 0`, so an edit
+   operation cannot single out one node.
+2. **`EditScript.attach_to` crashes.** It walks the tree with `get_children()`,
+   which reads derived features the SysMLv2 classes leave unimplemented:
+   `AttributeError: Operation not permited for "importedMembership" feature`
+   (the same pitfall `Element.visit`'s docstring warns about).
+
+This likely explains why the SysMLv2 updates in `languages/sysmlv2/updates.py`
+leave `edit_script` empty and change the runtime registry directly.
+
+## What the two update modes do with the old runtime state
+
+- **`RESTART`: full replacement.** The edit script is applied to the AST and
+  `init()` rebuilds the whole runtime state from scratch. Nothing compares old
+  and new state. (For SysMLv2 this path does not work today, per the previous
+  section.)
+- **`HOTSWAP`: targeted, but opaque.** An update's `apply()` changes specific
+  records of the existing registry in place (e.g. `RemessageTransitionEffect`
+  changes one `Transition` argument). What it targets is known only inside its
+  Python code: nothing can ask the update beforehand which records or part defs
+  it will touch, and nothing records afterwards what changed.
+
+## The targets are known, by convention
+
+Each update's constructor arguments already locate its target in the old runtime
+state. `RemessageTransitionEffect(state_def, source_substate, ...)` names the
+transition whose argument it changes, and the same lookup `apply()` uses could
+resolve that record before applying. But each class keeps this in its own private
+fields (`_state_def`, `_source_substate`, ...), so the VM cannot ask uniformly.
+
+## Options for stating what an update affects
+
+- **A. Make edit scripts work for SysMLv2.** Unique `identifier`s at load time
+  (the XMI's `elementId` is a UUID string while `identifier` is an integer, so a
+  mapping is needed); `attach_to` walking only plain containment; rebuilding the
+  affected registry records after an AST edit. The AST stays the source of truth
+  and the AST/registry drift (Topic 2) goes away, but it touches the loader and
+  the core `EditScript`: to agree with Valentin first.
+- **B. The update declares its affected part defs** (e.g.
+  `affected_part_defs()` returning qualified names). Simple, works with the
+  current registry-only updates. The interpreter trusts the author; it should at
+  least raise if a declared name is not a known part def. Does not fix the drift.
+- **C. The update declares its affected AST nodes by qualified name**; the
+  interpreter walks up to the enclosing part def (Topic 9's rule). Like B, at node
+  level, and extends beyond part defs later.
+- **D. Rebuild and compare.** Build a new registry from the changed model and
+  compare it with the running one; differing records give the affected part defs,
+  with nothing declared. Still needs a way to change the SysMLv2 model (A's
+  problems) or to load a whole new version, a way to match records (e.g. by
+  qualified name), and it says only *what* differs, not how to migrate the
+  running state.
+
+Leaning for the prototype: B or C, exposing the targets each update class already
+knows through one common method.
+
+## One update class per kind of change, named after the SysMLv2 construct
+
+Following the existing pattern, each kind of change is an `Update` subclass whose
+constructor names the target and whose `apply()` migrates the running state.
+Classes are named after the **SysMLv2 construct** they change, not after a domain
+operation: "move a part" is one *use* of a generic class, e.g.
+
+```python
+RedefineAttributeValue(
+    part_usage="Main::tokenDepo",
+    attribute="placementCoordinate",
+    new_value=<FactoryCoordinate x=..., y=..., degrees=...>,
+)
+```
+
+The same class would serve a thermostat setpoint or a CityLearn battery capacity.
+
+Separation of concerns:
+
+| Concern | Owner |
+|---|---|
+| *How* an attribute redefinition is changed (registry and simulation) | The generic update class (language level) |
+| *Whether* it is safe to change it now | The part's `#Tranquility` constraint (model level) |
+| *When* updates are considered at all | The checkpoint (`StateUsage`, before a reactive pass) |
+
+Domain knowledge such as "do not move the conveyor while a token is on it"
+belongs in the model's tranquility constraint, not in a `MoveConveyor` update.
+
+## What `RedefineAttributeValue` must migrate
+
+A part's attribute value lives in two places:
+
+1. **The registry.** The part usage's `rt.PartInstantiation.attribute_redefinitions`
+   (e.g. `placementCoordinate` as a `CompositeCustomValue`). `apply()` replaces
+   the redefinition's value, the same way for any attribute.
+2. **The simulation.** The simulated machine received the value once, when
+   `PartInstantiation.evaluate` called `SimulationBridge.instantiate(...)`, which
+   is idempotent (`Factory.instantiate_machine` does nothing for an
+   already-registered part). The bridge offers only `instantiate`, `call_action`
+   and `emit_event`: **no command changes an attribute of an existing machine**.
+   A generic `set_attribute(qualified_name, attribute_name, value)` command is
+   needed, converting the value the way `instantiate` already does through
+   `CustomAttributeModel`. A simulation model that cannot change an attribute
+   live should raise rather than silently ignore it.
+
+The new value is a registry `Value` (`CompositeCustomValue` for a structured
+attribute, `LiteralValue` for a scalar), keeping the update independent of domain
+types. Unlike the existing SysMLv2 updates, which only change interpreter-side
+behaviour, this one must migrate the simulation as well.
+
+Tranquility: the target `Main::tokenDepo` is a part usage typed by
+`TokenDepoMachine`, so only that part def's constraint applies (Topic 9), instead
+of `QuiescentUpdate`'s "all machines settled, mailboxes empty".
+
+## Open questions
+
+1. **Usage vs. definition.** Changing a part usage's redefinition affects one
+   instance; changing a part def's attribute default affects every instance and
+   brings back incremental vs. atomic application (Topic 9). Likely two classes,
+   e.g. `RedefineAttributeValue` (usage) and `ChangeAttributeDefault` (def).
+2. **Missing redefinition.** If the part usage does not redefine the attribute
+   yet (it uses the default), should the update add a redefinition, or raise?
+
+---
+
+# Topic 11 — Three levels of responsibility for tranquility
+
+## The idea
+
+Modellers decide which constraints are tranquility conditions, but they can do so
+only because the **language engineer** gives them a construct for it. In turn,
+the **VM** must give language engineers an interface for offering such a
+construct in their language. Each level provides a means of expression to the
+level below:
+
+| Level | Provides | To whom | In our case |
+|---|---|---|---|
+| **VM / framework** (`core/`) | An interface: how a language declares the way tranquility is defined in it | Language engineers | To design |
+| **Language engineer** (`languages/sysmlv2/`) | A construct in the language for defining tranquility | Modellers | `#Tranquility` metadata on constraints |
+| **Modeller** (`.sysml`) | The actual tranquility conditions | The running system | `#Tranquility constraint { platformSens == false }` |
+
+## Contrast with language safe points
+
+Language safe points have **two** levels. The VM provides `UpdatePoint`
+(`UpdateBeforePoint` / `UpdateAfterPoint` in `core/language.py`), and the
+language engineer decides directly that every `StateUsage` is one. The modeller
+has no say.
+
+Tranquility has **three**: the language engineer does not decide *which* nodes
+are tranquility conditions, but *how modellers can say so*. A bare per-node query
+in core (e.g. `AbstractSyntaxElement.isTranquilityCondition()`, default `False`)
+lets a language *answer* whether a node is a tranquility condition, but does not
+give the language engineer an interface for *defining* how modellers express it.
+It is therefore not sufficient on its own.
+
+## A possible shape for the core interface
+
+1. **Class level, chosen by the language engineer:** "this construct of my
+   language *can* define tranquility". E.g. a core abstract class (working name
+   `TranquilityPoint`) that SysMLv2's `ConstraintUsage` extends, as `StateUsage`
+   extends `UpdateBeforePoint`.
+2. **Instance level, chosen by the modeller, with the rule set by the language
+   engineer:** "this particular element *does* define tranquility". The language
+   engineer implements the recognition rule: in SysMLv2, "labelled
+   `#Tranquility`" (`_is_tranquility_constraint`); another language could use a
+   keyword or a naming rule. Class-based marking alone cannot express this, since
+   only *some* `ConstraintUsage`s are tranquility conditions.
+3. **What else the language engineer provides**, so the VM can use the modeller's
+   definitions without knowing the language:
+   - **scope:** which program element a condition applies to (in SysMLv2, the
+     enclosing `part def`), so the VM can select the relevant conditions for an
+     update (Topic 9);
+   - **evaluation:** whether the condition holds now, against the running state,
+     for a given instance.
+
+The interface would say to a language engineer: *make the constructs you offer
+extend `TranquilityPoint`; tell the VM how to recognise which instances the
+modeller marked, what each applies to, and how to evaluate it.*
+
+## Relation to the runtime side
+
+In SysMLv2, behaviour runs off the runtime registry, so the VM cannot evaluate an
+AST node directly. The built, evaluable conditions live on runtime records; the
+idea of an abstract runtime class (working name `TranquilityHolder`) that runtime
+records with tranquility extend, holding `tranquility_conditions`, fits here as
+the language engineer's runtime counterpart. A link from the marked AST node to
+its runtime condition is needed, similar to `RuntimeStateElement.ast_node()`
+linking runtime records back to AST nodes.
+
+## Open points
+
+- The exact core interface (class and method names, signatures). The evaluation
+  signature must allow different "instances" per construct: a part def is
+  evaluated per `PartInstantiation`, a state-level condition per running state
+  machine.
+- This changes `core/language.py`, Valentin's code: to discuss with him.
+- Sequencing relative to steps 2 and 3, which this restructures.
+
+---
+
 ## Status
 
 - Two-layer model (language safe point + execution tranquility point, plus
@@ -685,4 +958,16 @@ a substate.
   implementing: verify the metadata survives the XMI export (**next step**),
   decide where `metadata def Tranquility` lives (leaning: shared LipVM library
   package), add interpreter support for metadata and constraints.
+- Selective tranquility per update (Topic 9): **direction agreed**, scoped to
+  part defs for now. Incremental vs. atomic application: **open**, suggested
+  start is atomic. How an update states its affected AST nodes: Topic 10.
+- Update targets and construct-level updates (Topic 10): **agreed** that SysMLv2
+  update classes are named after constructs (e.g. `RedefineAttributeValue`), not
+  domain operations. How an update states what it affects: **leaning B or C**.
+  Open: usage vs. definition classes, missing redefinitions, and a new
+  `set_attribute` bridge command for the simulation.
+- Three levels of responsibility (Topic 11): **agreed**: the VM provides an
+  interface to language engineers, who provide a construct to modellers. Exact
+  core interface, discussion with Valentin, and sequencing with steps 2–3:
+  **open**.
 - No code changes made.
