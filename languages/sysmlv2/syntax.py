@@ -82,6 +82,30 @@ def _feature_chain(feature):
     return None
 
 
+# Qualified name of the metadata definition that labels a constraint as a
+# tranquility condition (see Language-Safe-and-Execution-Tranquility-points.md).
+TRANQUILITY_METADATA = "LiveModeling::Tranquility"
+
+
+def _is_tranquility_constraint(node):
+    """Whether `node` is a constraint labelled `#Tranquility`, i.e. it owns a
+    MetadataUsage typed by the LiveModeling::Tranquility metadata definition.
+
+    Reads the metadata through containment (a MetadataUsage annotates the
+    element that owns it) rather than MetadataUsage.annotatedElement, a
+    derived feature this module leaves unimplemented. Matched by qualified
+    name, so a same-named metadata definition in another package doesn't
+    count.
+    """
+    if not isinstance(node, ConstraintUsage):
+        return False
+    return any(
+        isinstance(metadata, MetadataUsage)
+        and qualified_name(_feature_type(metadata)) == TRANQUILITY_METADATA
+        for metadata in _owned_by_kind(node, OwningMembership)
+    )
+
+
 def _resolve_feature_reference(node):
     """Resolves a FeatureReferenceExpression — SysML's own construct for "this
     value is another Feature" (e.g. conveyorBelt=cb1) — to a bare Reference
@@ -7944,6 +7968,15 @@ specializesFromLibrary('Metadata::MetadataItem')"""
     def __init__(self, **kwargs):
 
         super().__init__(**kwargs)
+
+    def visit(self, parent):
+        """Overrides ItemDefinition.visit(): a metadata definition (e.g.
+        LiveModeling::Tranquility) labels model elements for the interpreter,
+        it isn't an item the state machines exchange, so it registers nothing.
+        Annotated elements read their metadata directly (see
+        _is_tranquility_constraint).
+        """
+        pass
 
 
 class DerivedRendering(EDerivedCollection):

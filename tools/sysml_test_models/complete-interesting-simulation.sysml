@@ -1,3 +1,11 @@
+package LiveModeling {
+    // Labels a constraint as a tranquility condition: a hot update may only be
+    // applied while it holds (see Language-Safe-and-Execution-Tranquility-points.md).
+    metadata def Tranquility {
+        :> annotatedElement : SysML::ConstraintUsage;
+    }
+} // package LiveModeling
+
 package Common {
     part def Machine;
     private import ScalarValues::*;
@@ -18,12 +26,6 @@ package Common {
         WHITE;
     }
 
-    // Labels a constraint as a tranquility condition: a hot update may only be
-    // applied while it holds (see Language-Safe-and-Execution-Tranquility-points.md).
-    metadata def Tranquility {
-        :> annotatedElement : SysML::ConstraintUsage;
-    }
-
 } // package Common
 
 package TokenProducerSystem {
@@ -31,6 +33,7 @@ package TokenProducerSystem {
     private import ScalarValues::*;
     private import Common::*;
     private import Common::Messages::*;
+    private import LiveModeling::*;
 
     package TokenProducerCommands {
 
@@ -121,6 +124,7 @@ package TokenDepoSystem {
     private import ScalarValues::*;
     private import Common::*;
     private import Common::Messages::*;
+    private import LiveModeling::*;
 
     package TokenDepoCommands {
 
@@ -305,6 +309,7 @@ package VacuumGripperSystem {
     private import ScalarValues::*;
     private import Common::*;
     private import Common::Messages::*;
+    private import LiveModeling::*;
 
     package VacuumGripperCommands {
         enum def VacuumGripperCommandKind {
