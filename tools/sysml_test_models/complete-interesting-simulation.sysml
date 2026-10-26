@@ -18,6 +18,12 @@ package Common {
         WHITE;
     }
 
+    // Labels a constraint as a tranquility condition: a hot update may only be
+    // applied while it holds (see Language-Safe-and-Execution-Tranquility-points.md).
+    metadata def Tranquility {
+        :> annotatedElement : SysML::ConstraintUsage;
+    }
+
 } // package Common
 
 package TokenProducerSystem {
@@ -73,6 +79,10 @@ package TokenProducerSystem {
             attribute lastUsedTokenColor: TokenColorKind;
 
             attribute placementCoordinate : FactoryCoordinate;
+
+            #Tranquility constraint {
+                platformSens == false
+            }
         }
     } // package TokenProducer
 
@@ -147,6 +157,11 @@ package TokenDepoSystem {
             attribute currentCommand : TokenDepoCommandKinds;
 
             attribute placementCoordinate : FactoryCoordinate;
+
+            // Tranquil while idle with no token is currently at the receiving platform.
+            #Tranquility constraint {
+                receiverSens == false
+            }
         }
 
     } // package TokenDepo
@@ -403,6 +418,12 @@ package VacuumGripperSystem {
             attribute vacuumActValve : Boolean;
 
             attribute placementCoordinate : FactoryCoordinate;
+
+            #Tranquility constraint {
+                verticalEncoder == 0.0 and armEncoder == 0.0 and rotEncoder == 0.0 and vacuumActCompressorOn == false
+                and vacuumActValve == false
+            }
+
         }
     } // package VacuumGripper
 
