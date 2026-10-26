@@ -148,6 +148,13 @@ class ReferenceValue(Value):
           message) rather than silently handing back the bare qualified
           name, which a caller (e.g. BinaryExpression) could otherwise
           compare against as if it were a real value.
+        - "AttributeUsage" (a bare attribute name, e.g. receiverSens in a
+          part def's #Tranquility constraint) is only meaningful relative to
+          the part instance being checked, the execution context's
+          current_part (set by TranquilityHolder.is_tranquil()). It reads
+          that part's observed value, which raises PartNotReadyError if the
+          simulation hasn't published the part yet. Raises if there is no
+          current_part, rather than reading some other part's value.
         - Anything else, with a registered lookup table (today, just
           "PartInstantiation", e.g. conveyorBelt=cb1 -- confirmed by
           walking both real models, nothing else shows up) resolves to
@@ -186,6 +193,16 @@ class ReferenceValue(Value):
                 )
             return binding.value.evaluate(runtime)
 
+        if self.el.reference_type == "AttributeUsage":
+            part = runtime.execution_context.current_part
+            if part is None:
+                raise RuntimeError(
+                    f"Cannot resolve attribute reference '{self.el.qualified_name}': no "
+                    f"current_part in the execution context, but a bare attribute name can "
+                    f"only be resolved against the part instance being checked."
+                )
+            return part.observed_value(self.el.qualified_name.split("::")[-1])
+
         table_name = _LOOKUP_TABLE_NAME_BY_REFERENCE_TYPE.get(self.el.reference_type)
         if table_name is not None:
             record = getattr(runtime.sysml, table_name).get_reference(self.el.qualified_name)
@@ -194,7 +211,7 @@ class ReferenceValue(Value):
         raise LookupError(
             f"No resolution rule for reference_type '{self.el.reference_type}' "
             f"(qualified_name='{self.el.qualified_name}') -- handled types: "
-            f"'EnumerationUsage', 'Parameter', {sorted(_LOOKUP_TABLE_NAME_BY_REFERENCE_TYPE)}."
+            f"'EnumerationUsage', 'Parameter', 'AttributeUsage', {sorted(_LOOKUP_TABLE_NAME_BY_REFERENCE_TYPE)}."
         )
 
 class AttributeReference(Value):
@@ -278,6 +295,31 @@ class TranquilityHolder(RuntimeStateElement, metaclass=MetaEClass):
     may only be applied while they hold. Extended by PartDef for now.
     """
     tranquility_conditions = EReference(eType=Value, lower=0, upper=-1, containment=True)
+
+    def is_tranquil(self, instance, runtime: RuntimeState) -> bool:
+        """Whether `instance` (e.g. a PartInstantiation of this PartDef) is
+        tranquil right now: every tranquility condition holds against its
+        observed values. While evaluating, `instance` is the execution
+        context's current_part, which bare attribute names in a condition
+        (e.g. `receiverSens`) resolve against; it is cleared afterwards.
+
+        Not tranquil if the instance has no observed values yet (the
+        simulation hasn't published it): tranquility can't be confirmed.
+        Raises if there are no conditions at all, rather than silently
+        picking a default (to be decided when updates use this).
+        """
+        if not self.tranquility_conditions:
+            raise ValueError(
+                f"{instance.qualified_name!r}: its definition has no tranquility conditions, "
+                f"so whether it is tranquil is undefined.")
+        context = runtime.execution_context
+        context.current_part = instance
+        try:
+            return all(bool(condition.evaluate(runtime)) for condition in self.tranquility_conditions)
+        except PartNotReadyError:
+            return False
+        finally:
+            context.current_part = None
 
 class Record(ElementDefinition, metaclass=MetaEClass):
     element_type = EReference(eType=ElementDefinition, lower=1, upper=1, containment=False)
@@ -1045,6 +1087,9 @@ class ExecutionContext(RuntimeStateElement, metaclass=MetaEClass):
         super().__init__(**kwargs)
         self.current_state_usage = None
         self.current_snapshot = None
+        # The part instance a tranquility check is evaluating, set only for
+        # the duration of TranquilityHolder.is_tranquil().
+        self.current_part = None
 
     def begin(self, state_usage: "ExecutableStateUsage", channel) -> None:
         self.current_state_usage = state_usage
