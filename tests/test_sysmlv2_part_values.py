@@ -1,7 +1,8 @@
-"""Part A of the models@runtime design (Language-Safe-and-Execution-Tranquility-points.md,
-Topic 12): each VM round, the simulation's published values for every part are
-copied onto its PartInstantiation, and read through
-PartInstantiation.observed_value(name).
+"""Parts A and B of the models@runtime design (Language-Safe-and-Execution-Tranquility-points.md,
+Topic 12). Part A: each VM round, the simulation's published values for every
+part are copied onto its PartInstantiation, and read through
+PartInstantiation.observed_value(name). Part B: `when` conditions read those
+values too, instead of the snapshot.
 
 Written ahead of the implementation. `syntax.refresh_part_values` is looked up
 on the module inside each test, so that until it exists each test fails on its
@@ -100,3 +101,33 @@ def test_vm_round_refreshes_the_part_values():
     for _ in vm.state.sysml.lookup_table_executable_state_usages.records:
         vm.step()
     assert _part(vm, TOKEN_DEPO).observed_value("receiverSens") is True
+
+
+# --- Part B: `when` conditions read the observed values ---
+
+TOKEN_DEPO_MISSION = "Main::tokenDepoMission"
+
+
+def _substate(vm: VirtualMachine, state_usage, name: str):
+    """The substate `name` of `state_usage`'s state def."""
+    state_def = vm.state.sysml.lookup_table_state_defs.get_reference(
+        state_usage.state_def_origin.qualified_name).element_type
+    return next(substate for substate in state_def.substates if substate.name == name)
+
+
+def test_when_condition_reads_the_observed_values_not_the_snapshot():
+    # The simulation publishes again after the round's refresh: a `when`
+    # condition still sees the refreshed values, the same ones tranquility
+    # reads, not the newer snapshot.
+    vm = _build()
+    _publish_and_refresh(vm, {TOKEN_DEPO: _token_depo_values(receiverSens=True)})
+    vm.state.channel.latest_snapshot.publish({TOKEN_DEPO: _token_depo_values(receiverSens=False)})
+
+    # The condition only needs the mission's bound arguments (tokenDepoInstance),
+    # so set the running state machine directly instead of stepping the VM.
+    mission = vm.state.sysml.lookup_table_executable_state_usages.get_reference(TOKEN_DEPO_MISSION).element_type
+    vm.state.execution_context.current_state_usage = mission
+
+    # `state Idle; accept when tokenDepoInstance.receiverSens == true ... then CheckCapacity;`
+    [idle_to_check_capacity] = _substate(vm, mission, "Idle").contained_transitions
+    assert idle_to_check_capacity.trigger.evaluate(vm.state) is True
