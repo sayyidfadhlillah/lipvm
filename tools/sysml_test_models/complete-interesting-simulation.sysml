@@ -1,4 +1,4 @@
-package LiveModeling {
+library package LiveModeling {
     // Labels a constraint as a tranquility condition: a hot update may only be
     // applied while it holds (see Language-Safe-and-Execution-Tranquility-points.md).
     metadata def Tranquility {
