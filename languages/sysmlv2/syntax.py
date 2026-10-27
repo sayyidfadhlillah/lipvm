@@ -96,8 +96,12 @@ def _is_tranquility_constraint(node):
     derived feature this module leaves unimplemented. Matched by qualified
     name, so a same-named metadata definition in another package doesn't
     count.
+
+    An asserted constraint (`assert constraint`) doesn't count either:
+    tranquility must not be an invariant (Topic 6), so it is ignored like any
+    other unsupported use of the label, rather than raising.
     """
-    if not isinstance(node, ConstraintUsage):
+    if not isinstance(node, ConstraintUsage) or isinstance(node, AssertConstraintUsage):
         return False
     return any(
         isinstance(metadata, MetadataUsage)

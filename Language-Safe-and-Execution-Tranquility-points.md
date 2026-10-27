@@ -640,6 +640,15 @@ checked against the specification.
   - an *asserted* constraint (`assert constraint`), since tranquility must not
     be an invariant (Topic 6).
 
+**Revised (2026-10-27): ignore rather than raise.** Our exporter
+(`sysml-to-xmi-cli.jar`) does **not** enforce the `annotatedElement`
+restriction: a throwaway model with `#Tranquility` on an attribute, an
+`assert constraint`, a constraint in a `state def` and a constraint in a part
+usage exported without error. For the research prototype the interpreter does
+not raise either. It picks up only an **unasserted `#Tranquility` constraint
+owned by a part def** and silently ignores every other use: the exporter may
+accept it, the interpreter just doesn't act on it.
+
 ## To settle before implementing
 
 1. **Does the metadata survive the XMI export?** Everything depends on this, so
@@ -657,6 +666,28 @@ checked against the specification.
 Placement for the prototype follows Topic 7's suggested first version: a
 constraint in a `state def` over its parameters' attributes, optionally scoped to
 a substate.
+
+**Settled (implementation step 1, Topic 12):**
+
+1. The metadata survives the XMI export: each `#Tranquility` constraint owns a
+   `MetadataUsage` typed by the metadata definition.
+2. `metadata def Tranquility` lives in a shared `library package LiveModeling`,
+   which models import (`private import LiveModeling::*;`). The interpreter
+   matches it by qualified name (`TRANQUILITY_METADATA` in `syntax.py`), not by
+   the package being a library. Re-exporting after adding the `library`
+   keyword changed only the package's type (`sysml:Package` →
+   `sysml:LibraryPackage`), and the full suite still passed.
+3. Interpreter support: `_is_tranquility_constraint` and
+   `_tranquility_condition` in `syntax.py`.
+
+Placement changed from the sketch: the constraints sit in **part defs**, over
+the part's own attributes (e.g. `TokenDepoMachine`), not in a `state def`.
+
+**Ignoring unsupported uses (see the revision under Validation):** done. A
+non-constraint, and a constraint outside a part def, were already ignored. An
+`assert constraint` is now ignored too: `_is_tranquility_constraint` rejects an
+`AssertConstraintUsage` explicitly, since it is also a `ConstraintUsage`
+(`test_asserted_tranquility_constraint_is_ignored`).
 
 ---
 
@@ -947,7 +978,9 @@ The prototype is built in steps, each test-first (`tests/test_sysmlv2_tranquilit
    `PartDef` extends it, and `PartDefinition.visit` builds the conditions with the
    existing `_build_expression`. Done.
 3. **Evaluate** the conditions for one part instance: "is `Main::tokenDepo`
-   tranquil right now?". Tests written, not implemented.
+   tranquil right now?". `TranquilityHolder.is_tranquil`,
+   `ExecutionContext.current_part`, and the `ReferenceValue` "AttributeUsage"
+   branch (`runtime.py`). Done.
 4. **Connect** tranquility to updates (Topics 9, 10).
 
 ## Step 3 decisions
@@ -967,7 +1000,46 @@ The prototype is built in steps, each test-first (`tests/test_sysmlv2_tranquilit
   it yet): the check answers **not tranquil** rather than raising. Tranquility
   cannot be confirmed yet; a later check gives a real answer.
 - **Part def without conditions** (e.g. `ConveyorBeltMachine`): not covered by
-  step 3; the default is decided in step 4.
+  step 3; the default is decided in step 4. For now `is_tranquil` raises
+  `ValueError`, as a proposal.
+
+## Bare attribute names, no `self` or `this`
+
+**Decided:** conditions refer to the part's attributes by bare name
+(`receiverSens == false`), not through `self` or `this`.
+
+- **It is valid SysMLv2.** Names resolve through the enclosing namespaces,
+  including inherited members, so `receiverSens` resolves to the part def's
+  attribute. The constraint is a feature of the part def, so it is evaluated
+  against the part instance. The official training material uses the same
+  form, e.g. `assert constraint {totalMass == chassisMass + engine.mass +
+  transmission.mass}` inside a part:
+  - [Derivation Constraints.sysml](https://github.com/Systems-Modeling/SysML-v2-Release/blob/master/sysml/src/training/31.%20Constraints/Derivation%20Constraints.sysml)
+  - [Constraint Assertions-1.sysml](https://github.com/Systems-Modeling/SysML-v2-Release/blob/master/sysml/src/training/31.%20Constraints/Constraint%20Assertions-1.sysml)
+
+  These examples are asserted constraints; ours are unasserted (Topic 6), which
+  does not change name resolution.
+- **`self` and `this` are not keywords.** They are standard-library features
+  (`self` on `Anything`, `this` on occurrences), also resolved by scope. Inside
+  a constraint body, `self` may well resolve to the constraint itself rather
+  than the part, so they add a dependency on library rules without making the
+  model clearer.
+- **The implicit context is made explicit in the interpreter:**
+  `ExecutionContext.current_part`, which a bare `AttributeUsage` reference
+  resolves against, and which raises when it is unset.
+
+Alternatives considered, if explicitness in the model becomes a goal:
+
+- An `in` parameter typed by the part def (`in machine : TokenDepoMachine;
+  machine.receiverSens == false`), bound by the interpreter.
+- `SemanticMetadata` in `LiveModeling`, whose `baseType` gives every
+  `#Tranquility` constraint an inherited `target` parameter. Editor/XMI support
+  for the implicit specialisation is unverified.
+
+**Debt:** `ReferenceValue` looks the attribute up by its **short name**, not by
+the feature itself. That works for inherited constraints and for redefinitions
+that keep the name (`:>> receiverSens`). It would break if a subtype redefined
+the attribute under a different name.
 
 ## Where attribute values come from today
 
@@ -1163,8 +1235,9 @@ or inspects the runtime model as XMI. To keep the later switch cheap:
   an observed value is never mistaken for controlling the machine. The separate
   dict and accessor already keep them apart structurally; naming and
   documentation should make it explicit.
-- The step-3 tests currently publish a snapshot and call `is_tranquil` directly;
-  they must also call the refresh (decision point 2 above).
+- ~~The step-3 tests currently publish a snapshot and call `is_tranquil`
+  directly; they must also call the refresh (decision point 2 above).~~
+  Resolved: they publish and refresh (`_publish_and_refresh`).
 
 ---
 
@@ -1188,11 +1261,12 @@ or inspects the runtime model as XMI. To keep the later switch cheap:
   parameters, optionally substate-scoped; **not yet decided**. Identification
   mechanism (library type, keyword) and the alternative constructs (lifecycle
   region, update protocol) are **open / deferred**.
-- First prototype (Topic 8): **decided**: unasserted constraints, identified by
-  `#Tranquility` metadata; the interpreter raises on misuse. Before
-  implementing: verify the metadata survives the XMI export (**next step**),
-  decide where `metadata def Tranquility` lives (leaning: shared LipVM library
-  package), add interpreter support for metadata and constraints.
+- First prototype (Topic 8): **decided and implemented**: unasserted
+  constraints, identified by `#Tranquility` metadata from
+  `library package LiveModeling`, placed in part defs. The metadata survives the
+  XMI export. **Revised:** unsupported uses are ignored rather than raised on,
+  and the exporter doesn't enforce the `annotatedElement` restriction. Ignoring
+  an `assert constraint`: **done**.
 - Selective tranquility per update (Topic 9): **direction agreed**, scoped to
   part defs for now. Incremental vs. atomic application: **open**, suggested
   start is atomic. How an update states its affected AST nodes: Topic 10.
@@ -1205,12 +1279,13 @@ or inspects the runtime model as XMI. To keep the later switch cheap:
   interface to language engineers, who provide a construct to modellers. Exact
   core interface, discussion with Valentin, and sequencing with steps 2–3:
   **open**.
-- Evaluation and attribute values (Topic 12): steps 1–2 **done**; step 3 tests
-  **written, not implemented**. **Decided:** models@runtime first, as Part A
-  (per-round refresh of part values) → step 3 → Part B (`when` conditions read
-  the copied values). **Decided:** copied values as a plain dict behind
+- Evaluation and attribute values (Topic 12): steps 1–3 **done**, Part A
+  **done**, Part B **open**. **Decided:** copied values as a plain dict behind
   `PartInstantiation.observed_value(name)`, tests going through the refresh.
+  **Decided:** conditions use bare attribute names, no `self`/`this` (valid
+  SysMLv2, with evidence in Topic 12). **Open (step 4):** the default for part
+  defs without conditions (`is_tranquil` raises `ValueError` for now).
   **Debt:** reflective pyecore mirror plus registry containment fix when XMI
   reflection of the runtime model is needed (today the registry saves to XMI
-  as an empty skeleton).
-- No code changes made.
+  as an empty skeleton); attribute lookup by short name breaks under a
+  renaming redefinition.

@@ -17,7 +17,7 @@ from core.vm import VirtualMachine
 
 from languages.sysmlv2 import runtime as rt
 from languages.sysmlv2 import syntax
-from languages.sysmlv2.syntax import ConstraintUsage
+from languages.sysmlv2.syntax import AssertConstraintUsage, ConstraintUsage
 from languages.sysmlv2.sysml_utility_classes import qualified_name
 
 from tools.load_xmi_with_syntax import load
@@ -28,10 +28,10 @@ XMI = "tests/complete-interesting-simulation.xmi"
 
 # --- Helpers ---
 
-def _build() -> VirtualMachine:
-    """Load the model and run the build/registry pass."""
+def _build(root=None) -> VirtualMachine:
+    """Load the model (or use the already loaded `root`) and run the build/registry pass."""
     vm = VirtualMachine()
-    vm.scenario = Scenario(program_definition=load(XMI).contents[0])
+    vm.scenario = Scenario(program_definition=root if root is not None else load(XMI).contents[0])
     vm.init()
     vm.step()
     return vm
@@ -122,6 +122,27 @@ def test_part_defs_carry_their_tranquility_condition():
 def test_part_def_without_tranquility_constraint_has_no_condition():
     part_def = _part_def(_build(), "ConveyorBeltSystem::ConveyorBelt::ConveyorBeltMachine")
     assert list(part_def.tranquility_conditions) == []
+
+
+def test_asserted_tranquility_constraint_is_ignored():
+    # Tranquility must not be an invariant (Topic 6), so the interpreter only
+    # picks up unasserted constraints. `#Tranquility assert constraint` passes
+    # the export, but is ignored like any other unsupported use of the label.
+    root = load(XMI).contents[0]
+    depo = "TokenDepoSystem::TokenDepo::TokenDepoMachine"
+    [constraint] = [element for element in root.eAllContents()
+                    if isinstance(element, ConstraintUsage) and _owner(element) == depo]
+
+    # Turn `#Tranquility constraint { receiverSens == false }` into
+    # `#Tranquility assert constraint { receiverSens == false }`: same label and
+    # expression, moved onto an AssertConstraintUsage in the constraint's place.
+    asserted = AssertConstraintUsage()
+    asserted.ownedRelationship.extend(list(constraint.ownedRelationship))
+    membership = constraint.eContainer()
+    membership.ownedRelatedElement.remove(constraint)
+    membership.ownedRelatedElement.append(asserted)
+
+    assert list(_part_def(_build(root), depo).tranquility_conditions) == []
 
 
 # --- Step 3: evaluating tranquility for a part instance ---
