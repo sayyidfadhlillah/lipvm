@@ -48,6 +48,20 @@ class ActionCommand:
 
 
 @dataclass(frozen=True)
+class SetAttributeCommand:
+    """Fire-and-forget command sent by the SysML interpreter after a live
+    update changed configured attribute values of running parts: one batch
+    per update, so the simulation applies every change in the same frame.
+
+    parts: qualified_name -> {attr_name: (custom_class_name, values)}, the
+        same per-part shape as InstantiateCommand.attrs, holding only the
+        changed attributes (e.g. "Main::tokenDepo" -> {"placementCoordinate":
+        ("FactoryCoordinate", {"x": 25.0, "y": 30.0, "degrees": 180.0})})
+    """
+    parts: dict
+
+
+@dataclass(frozen=True)
 class EventCommand:
     """Fire-and-forget command flowing the other way: an event the
     simulation side finished producing, to be delivered into the
@@ -101,6 +115,7 @@ class ThreadChannel(RuntimeStateElement):
     self.latest_snapshot: the latest SimulationSnapshot published by the Simulation Model and its visualization
     self.action_queue: a queue of actions to be executed by the Simulation model and its visualization
     self.instantiate_queue: a queue of parts to be instantiated in the Simulation model and its visualization
+    self.model_update_queue: a queue of model changes from live updates (one item per update, e.g. a SetAttributeCommand batch) to be applied to running parts
     self.event_queue: a queue of events produced by the Simulation model, to be delivered to the interpreter
     """
 
@@ -109,6 +124,7 @@ class ThreadChannel(RuntimeStateElement):
         self.latest_snapshot = SimulationSnapshot()
         self.action_queue = queue.Queue()
         self.instantiate_queue = queue.Queue()
+        self.model_update_queue = queue.Queue()
         self.event_queue = queue.Queue()
 
 class SimulationBridge:
@@ -140,6 +156,15 @@ class SimulationBridge:
         thread that ever calls a method on a machine.
         """
         channel.action_queue.put(ActionCommand(qualified_name, action_name, args))
+
+    @staticmethod
+    def set_attributes(channel: ThreadChannel, parts: dict):
+        """Enqueues one `SetAttributeCommand` for a whole batch of changed
+        attribute values -- fire-and-forget. The owning thread drains and
+        applies these once per tick, so every change in the batch lands in
+        the same frame.
+        """
+        channel.model_update_queue.put(SetAttributeCommand(parts))
 
     @staticmethod
     def emit_event(channel: ThreadChannel, item_name: str, source_qualified_name: str | None = None):

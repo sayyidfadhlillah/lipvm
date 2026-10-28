@@ -1173,15 +1173,169 @@ With 3c the bridge owns the collecting and the sending, update classes and the
 VM know nothing about the simulation, and **when** to send is only where
 `flush` is called:
 
-- **now:** right after the migration, in `TranquilUpdate.apply()`, so the
-  change reaches the simulation as close to the tranquility check as possible;
-- **3b remains possible** by calling `flush` at the start of the round instead,
-  with no change to the bridge.
+- ~~**now:** right after the migration, in `TranquilUpdate.apply()`~~
+- **Superseded later the same day:** with the pause handshake, the batch is
+  sent on the VM's "applied" notification instead (see "How the handshake
+  runs" below). The round-level decision, kept for the record:
+- ~~**Decided (revised 2026-10-28): once per interpreter round, next to
+  `refresh_part_values`**~~ in `Namespace.read_events_and_execute`. The VM
+  applies a pending update at a checkpoint during an interpreter step; the
+  interpreter then sends its results, and all traffic with the simulation stays
+  in one place, symmetric with `refresh_part_values`. Update classes only
+  change the model and never call `flush`; the core VM is unchanged.
+  - **Cost:** the batch goes out at the start of the next round, not right
+    after the update: up to the rest of the round (6 of 7 steps, roughly 0.1 s
+    at 0.02 s per step). A part that was tranquil when the update was applied
+    could start moving before the simulation receives the change. Accepted for
+    the first prototype.
+  - **Still atomic:** one batch per update; the record keeps everything until
+    flushed, and a round holds at most one applied update (single pending
+    slot). With nothing recorded, `flush` sends nothing.
+  - **Alternative, one line away if the gap matters:** call `flush` at the
+    start of each step (first line of `ExecutableStateUsage.evaluate`, right
+    after the checkpoint), which sends with no delay.
 
 **Where the collected list lives:** on the interpreter side only. Today
 `SimulationBridge` holds no state (static methods) and `ThreadChannel` is shared
 between the two threads, so the list needs its own interpreter-side object (e.g.
 a bridge instance in the runtime state), not the shared channel.
+
+**One general queue for model changes (decided 2026-10-28).** Attribute changes
+are only the first kind of change forwarded to the simulation; others will
+follow (e.g. adding parts). Rather than one queue per kind, `ThreadChannel` has
+one queue for model changes carrying different command types;
+`SetAttributeCommand` is the first. It is named `model_update_queue`. Each update
+is **one** item on it (one batch), and the simulation thread applies a drained
+item in `on_tick`, between two `model.tick()` calls: the whole update lands in
+the same frame, before the simulation advances again. Splitting one update into
+several items could let the simulation drain between two `put`s and apply half
+of it one frame earlier.
+
+**The `SynchronizationManager` (named 2026-10-28).** The interpreter-side
+object holding the record and `flush` (called "the bridge object" above) is a
+`RuntimeStateElement` named `SynchronizationManager`, registered in the runtime
+state next to the channel and reached as `runtime.synchronization_manager`.
+
+**Holding tranquility while the update is applied: pause first, then confirm
+(decided 2026-10-28).** Between the VM's decision and the simulation applying
+the batch, the simulation keeps running, and the decision itself rests on
+values copied at the start of the round. So the simulation is paused for the
+application, with a handshake:
+
+1. At a checkpoint where the copied values look tranquil, the VM requests a
+   pause, without applying yet.
+2. The simulation stops calling `model.tick()` (it keeps draining queues and
+   drawing) and publishes a fresh snapshot of the paused state.
+3. The VM refreshes the observed values from it and checks tranquility again,
+   on values that can no longer change:
+   - still tranquil: apply the update, send the batch, then the simulation
+     applies it and resumes;
+   - no longer tranquil: release the pause; the update keeps waiting.
+
+While the update is still *waiting*, the simulation keeps running (otherwise
+it could never become tranquil); it pauses only for the application. Rejected
+for now: a simple pause (pause when the VM decides, no confirmation), which
+closes the gap after the decision but not the staleness of the copied values
+before it.
+
+**How the handshake runs: the VM notifies, the `SynchronizationManager`
+reacts (decided 2026-10-28).** `core/` has no concept of pausing or
+simulations. Instead, the VM sends language-independent **notifications about
+the update** to registered listeners, and checks the condition twice around
+them, a two-phase commit (prepare, then commit or abort):
+
+```python
+# core/vm.py, _apply_pending_update
+if not update.condition(runtime):        # the VM checks
+    return                               #   not yet: keep waiting
+self._notify_ready(update)               # listeners prepare
+if not update.condition(runtime):        # the VM checks again, on the prepared state
+    self._notify_withdrawn(update)       # listeners undo
+    return
+update.apply(runtime)
+self._notify_applied(update)             # listeners finish
+self._pending_update = None
+```
+
+| Notification | Sent when | Means | `SynchronizationManager` reacts |
+|---|---|---|---|
+| ready (prepare) | the first `condition()` is true | "about to apply; prepare, I'll check again" | request the pause, wait until the simulation is frozen, refresh the copied values from the frozen state |
+| withdrawn (abort) | the second `condition()` is false | "not applying now; undo; the update stays pending" | resume, no batch |
+| applied (commit) | `update.apply()` has finished | "the runtime model is changed; finish" | send the batch (if any), then resume, in that order on `model_update_queue` |
+
+"ready" is always followed by exactly one of "withdrawn" or "applied" at the
+same checkpoint. The message doesn't say "pause": pausing is how the SysML
+side chooses to prepare; a language without a simulation doesn't listen.
+Suggested names in `core/`: `update_ready`, `update_withdrawn`,
+`update_applied`.
+
+Responsibilities:
+
+| Who | Does |
+|---|---|
+| VM (`core/vm.py`) | controls: at each checkpoint calls `condition()`, notifies, checks again, applies |
+| `TranquilUpdate.condition()` (SysML language layer, written once) | runs the check: all affected parts tranquil? A pure check, no side effects |
+| update classes (e.g. `ChangeRuntimeAttributeValue`) | only declare `affected_parts()` and the change (`apply()`); never check |
+| `SynchronizationManager` | only the mechanics, as a listener; never judges tranquility |
+
+- **The batch goes out on "applied"**, right after `apply()`, so the
+  simulation is paused only for that moment. This replaces the round-level
+  `flush` (decided earlier the same day): while the simulation is paused,
+  waiting for the next round would only keep it frozen longer.
+- **Cost:** a general listener mechanism in `core/vm.py` (registering listeners,
+  three notifications). Language-independent and without a pause concept, but a
+  change to Valentin's code, to be agreed with him. A SysML-only alternative
+  (the handshake inside `TranquilUpdate.condition()`, which then pauses as a
+  side effect) needs no core change.
+- **Still open:** where the listener is registered (when SysML builds the
+  runtime state, or in the driver); the pause and resume commands on
+  `model_update_queue`; how the simulation's acknowledgement comes back.
+
+**Measured (2026-10-28, headless runs of `complete-interesting-simulation`,
+tranquility checked every frame):** interpreter round median 0.146 s (slowest
+0.294 s; one 1.34 s spike in a 180 s run). The handshake needs a tranquil
+window of about two rounds plus a frame (~0.31 s).
+
+| Part | Tranquil periods | Handshake reachable? |
+|---|---|---|
+| `tokenDepo` | 13–58 s, ~99 % of the time | yes |
+| `cbFeeder`, `cbTransport` | median 3.5 s and 2.2 s | yes |
+| `tokenProd`, before | 0.018–0.121 s (refilled almost immediately) | hardly |
+| `tokenProd`, with a 0.6 s emit delay | 0.705–0.813 s | yes, even with the slowest round (2 × 0.294 + 0.017 ≈ 0.61 s) |
+| VGRs | only at startup (encoders all 0 before `setup`), then never | no: the condition doesn't match their idle position; accepted for now |
+
+To make the producer reachable, the simulation's token producer now waits 0.6 s
+(`TOKEN_EMIT_DELAY_STEPS = 36` steps at 60 fps and default speed) between an
+emit command and the token appearing (`token_producer.py`). For an unusually
+slow round the confirmation fails, the pause is released, and the update waits
+for the next tranquil window.
+
+**Showing that an update is waiting (decided 2026-10-28).** Reaching
+tranquility is the VM's job, so the demonstrator's message ("There is an update
+to the model. Waiting to reach tranquility") shows the **VM's status**, not the
+contents of a queue (the simulation drains its queues every frame, so a queue
+is empty again right after each drain, even while an update still waits). The
+core VM exposes a small read-only property:
+
+```python
+@property
+def has_pending_update(self) -> bool:      # core/vm.py
+    return self._pending_update is not None
+```
+
+The live driver (`main_lipvm_dtsimulation.py`), which already has `vm` in its
+`on_tick`, reads it every frame and has the visualization show the message
+while it is true. Reading it from the simulation thread is safe for the same
+reason as `SimulationSnapshot`: a single reference replaced as a whole. It
+works for every update (including `QuiescentUpdate`), and it is a small,
+read-only, language-independent addition to Valentin's `core/vm.py`, to tell
+him about. "Pending" covers the time from handing the update over until it is
+applied; the first checkpoint usually comes within one step, so this is
+practically "waiting for tranquility". Considered and dropped: `TranquilUpdate`
+publishing a `vm_status` topic on the channel (more code, SysML-only).
+
+**Later:** naming the parts the update waits for (that information is in
+`TranquilUpdate`). The first prototype keeps the message simple.
 
 **Demonstrator rule: live changes come only from update scripts.** There is no
 IDE turning edits of the `.sysml` model into updates; the demonstrator applies a

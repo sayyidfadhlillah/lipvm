@@ -404,7 +404,7 @@ def test_applied_update_sends_one_batch_with_the_changed_configured_values():
     vm.step()
     assert vm._pending_update is None
 
-    [batch] = _drain(vm.state.channel.set_attribute_queue)
+    [batch] = _drain(vm.state.channel.model_update_queue)
     # Their observed values changed, but they aren't sent back to the simulation.
     assert CB_FEEDER not in batch.parts
     assert VGR not in batch.parts
