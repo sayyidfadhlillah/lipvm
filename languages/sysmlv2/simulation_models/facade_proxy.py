@@ -152,24 +152,3 @@ class SimulationBridge:
         EVENT-QUEUE-DESIGN.md).
         """
         channel.event_queue.put(EventCommand(item_name, source_qualified_name))
-
-    @staticmethod
-    def read_attribute_from_snapshot(snapshot, qualified_name: str, attribute_name: str):
-        """Resolves one attribute off an already-captured snapshot (the
-        dict from a single `channel.latest_snapshot.read()` call). Callers
-        must capture that value once per evaluation pass and reuse it for
-        every lookup in that pass -- reading fresh per lookup can tear
-        reads across a compound guard.
-
-        Raises `PartNotReadyError` if no snapshot has been published yet,
-        or if `qualified_name` isn't in it -- an ordinary startup race,
-        not a real failure. Any other missing attribute surfaces as a
-        normal `AttributeError`.
-        """
-        if snapshot is None or qualified_name not in snapshot:
-            raise PartNotReadyError(
-                f"{qualified_name!r} not in the latest published snapshot yet -- "
-                f"can't read {attribute_name!r} on it (owning thread hasn't drained "
-                f"its instantiate() request yet)."
-            )
-        return getattr(snapshot[qualified_name], attribute_name)

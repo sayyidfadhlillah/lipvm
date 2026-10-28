@@ -1,20 +1,22 @@
 import logging
-from collections import deque
 from enum import Enum
-from typing import Optional
 
-from pyecore.ecore import MetaEClass, EAttribute, EReference, EString, EObject, EProxy, EEnum
+from pyecore.ecore import MetaEClass, EAttribute, EReference, EString, EObject, EProxy, EEnum, EDataType
 
 from core.language import AbstractSyntaxElement, RuntimeStateElement, RuntimeState
 from core.operation import operation
 from languages.sysmlv2.runtime_utility import ScalarType, _LITERAL_PYTHON_CONVERTERS, TypeKind, ParamDirection, \
     _BINARY_OPERATORS, _SCALAR_TYPE_BY_NAME
 from languages.sysmlv2.sysml_utility_classes import qualified_name
-from languages.sysmlv2.simulation_models.facade_proxy import PartNotReadyError, SimulationSnapshot, SimulationBridge
+from languages.sysmlv2.simulation_models.facade_proxy import PartNotReadyError, SimulationBridge
 from languages.sysmlv2.simulation_models.generic import ActionSimulationModel, CustomAttributeModel
 from languages.sysmlv2.simulation_models.registry import scan_for_subclasses
 
 logger = logging.getLogger(__name__)
+
+# A part's observed attribute values (name -> plain Python value), see
+# PartInstantiation.observed_values.
+ObservedValues = EDataType('ObservedValues', eType=dict)
 
 def _simulation_model_registry() -> dict:
     """Maps each concrete ActionSimulationModel subclass's name (e.g. "Print")
@@ -237,28 +239,22 @@ class AttributeReference(Value):
         (with the same informative errors on failure), so this no longer
         duplicates that lookup inline.
 
-        Only reads `attribute` off the resolved value through the bridge if
-        it actually resolved to a PartInstantiation -- the one case that
-        genuinely has a live simulation counterpart to read an attribute
-        from. Every model today binds `target` to a part (e.g.
-        conveyorBelt=cb1), so this is what actually happens in practice,
-        but nothing enforces a formal parameter must be bound to a part
-        specifically -- if it resolved to something else (e.g. a plain
-        scalar bound to that parameter instead), there's no "instance" to
-        read an attribute off of, so the resolved value itself, whatever
-        it is, is simply returned as-is rather than crashing on
-        `.qualified_name` (which only a PartInstantiation actually has).
+        Reads `attribute` from the resolved PartInstantiation's observed
+        values, the ones refresh_part_values() (syntax.py) copied from the
+        simulation this round -- the same values tranquility checks read, so
+        every state machine in a round sees one moment (see
+        Language-Safe-and-Execution-Tranquility-points.md, Topic 12, Part B).
+        observed_value() raises PartNotReadyError while the simulation hasn't
+        published the part yet. Every model today binds `target` to a part
+        (e.g. conveyorBelt=cb1); anything else raises NotImplementedError,
+        since there's no part to read an attribute from.
         """
-
-        snapshot_from_bridge = runtime.execution_context.current_snapshot
-
         resolved = ReferenceValue(el=self.target).evaluate(runtime)
         if not isinstance(resolved, PartInstantiation):
             raise NotImplementedError('Currently, only handling a case where attribute reference involves'
                                       'Part Instantiation. Please handle it first before continuing.')
         attribute_name = self.attribute.qualified_name.split("::")[-1]
-        return SimulationBridge.read_attribute_from_snapshot(
-            snapshot_from_bridge, resolved.qualified_name, attribute_name)
+        return resolved.observed_value(attribute_name)
 
 class BinaryExpression(Value):
     """A binary operation over two sub-values (e.g. `conveyorBelt.
@@ -606,8 +602,9 @@ class TransitionTriggerByWhenCondition(TransitionTrigger, metaclass=MetaEClass):
         immediate yes/no by whoever decides whether to fire a transition.
 
         `PartNotReadyError` (facade_proxy.py) means a nested
-        `AttributeReference` asked about a part the owning thread hasn't
-        finished instantiating/publishing yet -- an ordinary startup race,
+        `AttributeReference` asked about a part that has no observed values
+        yet, because the owning thread hasn't finished instantiating/publishing
+        it -- an ordinary startup race,
         not a real failure (see that exception's docstring). Treated the
         same as any other not-yet-satisfied condition: this trigger just
         doesn't fire this tick, and gets re-checked the next one, same as
@@ -783,7 +780,7 @@ class ExecutableStateUsage(ElementDefinition, metaclass=MetaEClass):
         """
 
         #Step 0, set the execution context
-        runtime.execution_context.begin(self, runtime.channel)
+        runtime.execution_context.begin(self)
 
         #Step 1: Only start executing this ExecutableStateUsage if the StateDef is resolved, otherwise just return None
         record_referenced_state_def: Record = runtime.sysml.lookup_table_state_defs.get_reference(
@@ -1027,16 +1024,15 @@ class PartInstantiation(ElementDefinition, metaclass=MetaEClass):
     # override).
     attribute_redefinitions = EReference(eType=AttributeRedefinition, lower=0, upper=-1, containment=True)
 
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        # Mirror of the simulation's latest values for this part's declared
-        # attributes (name -> plain Python value), set each VM round by
-        # refresh_part_values() (syntax.py); None until the simulation has
-        # published this part. Observed state, kept apart from the configured
-        # attribute_redefinitions above. A plain dict for now, not part of the
-        # pyecore model (see Language-Safe-and-Execution-Tranquility-points.md,
-        # Topic 12); read it only through observed_value().
-        self.observed_values = None
+    # Mirror of the simulation's latest values for this part's declared
+    # attributes (name -> plain Python value), set each VM round by
+    # refresh_part_values() (syntax.py); None until the simulation has
+    # published this part. Observed state, kept apart from the configured
+    # attribute_redefinitions above. A plain dict for now, declared but
+    # transient, so it isn't saved to XMI (see
+    # Language-Safe-and-Execution-Tranquility-points.md, Topic 12); read it
+    # only through observed_value().
+    observed_values = EAttribute(eType=ObservedValues, lower=0, upper=1, transient=True)
 
     def observed_value(self, name: str):
         """The latest value the simulation published for this part's
@@ -1086,14 +1082,12 @@ class ExecutionContext(RuntimeStateElement, metaclass=MetaEClass):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.current_state_usage = None
-        self.current_snapshot = None
         # The part instance a tranquility check is evaluating, set only for
         # the duration of TranquilityHolder.is_tranquil().
         self.current_part = None
 
-    def begin(self, state_usage: "ExecutableStateUsage", channel) -> None:
+    def begin(self, state_usage: "ExecutableStateUsage") -> None:
         self.current_state_usage = state_usage
-        self.current_snapshot = channel.latest_snapshot.read()
 
 class SysmlRuntimeState(RuntimeStateElement, metaclass=MetaEClass):
 
