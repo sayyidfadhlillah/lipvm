@@ -18,11 +18,18 @@ The domain-safe condition is **quiescence**: every state machine settled in a
 substate with an empty mailbox, so the registry is never rewired mid-reaction
 (the analog of minilogo's "pen up"). These updates carry no edit_script -- the
 change lives entirely in the migration.
+
+Updates that change the parts of the running system are gated by **execution
+tranquility** instead (`TranquilUpdate`): every part the update affects must
+satisfy its part def's `#Tranquility` constraints (see
+Language-Safe-and-Execution-Tranquility-points.md). The checkpoint stays the
+language safe point; tranquility is the `condition`.
 """
 
 from core.edit import Update
 from core.language import RuntimeState
 
+from languages.sysmlv2 import runtime as rt
 from languages.sysmlv2.syntax import StateUsage
 
 
@@ -30,6 +37,12 @@ def _executable_state_usages(runtime: RuntimeState):
     return [record.element_type
             for record in runtime.sysml.lookup_table_executable_state_usages.records]
 
+
+def _part_instantiation(runtime: RuntimeState, part_usage_qn: str) -> rt.PartInstantiation:
+    record = runtime.sysml.lookup_table_part_instantiations.get_reference(part_usage_qn)
+    if record is None:
+        raise LookupError(f"{part_usage_qn!r} is not a part usage of the running model.")
+    return record.element_type
 
 class SysmlUpdate(Update):
     """Base for sysmlv2 updates: the checkpoint is a state-machine reactive
@@ -102,3 +115,60 @@ class RerouteTransition(QuiescentUpdate):
     def apply(self, runtime: RuntimeState) -> None:
         transition = _transition(runtime, self._state_def, self._source_substate, self._transition_index)
         transition.target.qualified_name = self._new_target_substate
+
+class TranquilUpdate(SysmlUpdate):
+    """A sysmlv2 update only applied while every part it affects is tranquil
+    (PartInstantiation.is_tranquil: its part def's #Tranquility conditions
+    plus its own; a part without any is always tranquil). Replaces
+    QuiescentUpdate's "all machines settled" for updates that change parts of
+    the running system.
+
+    A subclass states what it affects through affected_parts(), derived from
+    the model element it changes, so the VM can ask before applying it.
+    """
+
+    def affected_parts(self, runtime: RuntimeState) -> list[rt.PartInstantiation]:
+        """The running part instances this update changes."""
+        raise NotImplementedError("A TranquilUpdate must declare its affected_parts()")
+
+    def condition(self, runtime: RuntimeState) -> bool:
+        return all(part.is_tranquil(runtime)
+                   for part in self.affected_parts(runtime))
+
+
+class ChangeRuntimeAttributeValue(TranquilUpdate):
+    """A runtime change: give an attribute of a running part usage (e.g.
+    `Main::tokenDepo`'s `placementCoordinate`) a new value. `apply()` replaces
+    the value of that usage's AttributeRedefinition in the registry.
+
+    Runtime means the owner has a runtime record (a PartInstantiation), i.e.
+    it is actually running. A part def owner is a design-time change, which
+    propagates to every usage that doesn't redefine the attribute: a separate
+    update class, so this one raises ValueError for it (see
+    Language-Safe-and-Execution-Tranquility-points.md, Topic 10, "Runtime vs.
+    design-time changes"). `new_value` is a registry Value
+    (CompositeCustomValue for a structured attribute, LiteralValue for a
+    scalar), keeping the update independent of domain types.
+    """
+
+    def __init__(self, owner: str, attribute: str, new_value: rt.Value, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._owner = owner
+        self._attribute = attribute
+        self._new_value = new_value
+
+    def affected_parts(self, runtime: RuntimeState) -> list[rt.PartInstantiation]:
+        if runtime.sysml.lookup_table_part_defs.get_reference(self._owner) is not None:
+            raise ValueError(
+                f"{self._owner!r} is a part def: changing its attribute value is a design-time "
+                f"change, not a runtime one.")
+        return [_part_instantiation(runtime, self._owner)]
+
+    def apply(self, runtime: RuntimeState) -> None:
+        part = _part_instantiation(runtime, self._owner)
+        redefinition = next((r for r in part.attribute_redefinitions if r.name == self._attribute), None)
+        if redefinition is None:
+            raise LookupError(
+                f"{self._owner!r} doesn't redefine {self._attribute!r} "
+                f"(redefined: {sorted(r.name for r in part.attribute_redefinitions)}).")
+        redefinition.value = self._new_value

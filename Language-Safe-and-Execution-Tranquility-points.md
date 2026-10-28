@@ -647,7 +647,10 @@ restriction: a throwaway model with `#Tranquility` on an attribute, an
 usage exported without error. For the research prototype the interpreter does
 not raise either. It picks up only an **unasserted `#Tranquility` constraint
 owned by a part def** and silently ignores every other use: the exporter may
-accept it, the interpreter just doesn't act on it.
+accept it, the interpreter just doesn't act on it. **Revised (2026-10-28):** an
+unasserted `#Tranquility` constraint owned by a **part usage** is picked up too,
+and adds to the part def's conditions (see "Which tranquility conditions apply
+to a part" below).
 
 ## To settle before implementing
 
@@ -688,6 +691,69 @@ non-constraint, and a constraint outside a part def, were already ignored. An
 `assert constraint` is now ignored too: `_is_tranquility_constraint` rejects an
 `AssertConstraintUsage` explicitly, since it is also a `ConstraintUsage`
 (`test_asserted_tranquility_constraint_is_ignored`).
+
+## Which tranquility conditions apply to a part
+
+**Resolved (2026-10-28) by SysML v2's inheritance rules.** The question was:
+once constraints may also sit on part usages, which conditions apply to a part
+(part def only, usage overrides definition, or usage adds to definition), and
+are a supertype's conditions inherited through part def specialization (e.g.
+`ConveyorBeltMachine specializes Machine`)?
+
+Checked against the metamodel documentation (generated into
+`languages/sysmlv2/syntax.py`):
+
+1. **Typing is a kind of specialization.** `FeatureTyping` is a subclass of
+   `Specialization`: "FeatureTyping is Specialization in which the specific Type
+   is a Feature. This means the set of instances of the (specific) typedFeature
+   is a subset of the set of instances of the (general) type." So `tokenDepo`
+   relates to `TokenDepoMachine` the way `ConveyorBeltMachine` relates to
+   `Machine` (`Subclassification`, also a `Specialization`).
+2. **A usage inherits its definition's constraints.** A type inherits "the
+   non-private Memberships of all the supertypes of this Type", with "redefined
+   Features removed" (`Type::inheritableMemberships`,
+   `Type::inheritedMemberships`). A `#Tranquility` constraint in a part def is
+   one of its features, so every usage typed by it inherits it, transitively
+   through specialization as well.
+3. **Per-machine evaluation is correct.** A `ConstraintUsage` is a
+   `BooleanExpression`, a condition evaluated in the context of each instance;
+   only an `AssertConstraintUsage` (also an `Invariant`) is asserted to be true
+   for every instance, which is why asserted ones are ignored.
+
+**The rule:** a part's tranquility conditions are its own plus every one it
+inherits through typing and specialization, minus any it redefines.
+
+- **Adding is the default:** a usage's own constraint comes on top of the
+  inherited ones.
+- **Overriding only through redefinition**, which needs a *named* constraint
+  (`constraint :>> name { ... }`). `#Tranquility` constraints are anonymous
+  today, so they can only accumulate.
+- **Private constraints are not inherited:** a `private` `#Tranquility`
+  constraint in a part def does not apply to its usages.
+
+**Not decided by SysML, our interpretation layer:** "an update applies only
+when *all* of a part's tranquility conditions are true". SysML only gives each
+unasserted constraint a true/false result per instance.
+
+**Consequence for the design:** the part, not its part def, answers "am I
+tranquil?". `PartInstantiation.is_tranquil(runtime)` takes the conditions of
+its part def (through `part_def_origin`) and evaluates them against itself;
+supertypes are deferred, since the interpreter has no part def inheritance at
+all yet (`ARCHITECTURAL-CONFUSION.md`, Topic 5); `PartDef` keeps only its conditions as data, and
+`TranquilUpdate.condition()` asks each affected part directly. Today's code asks
+only the direct part def (`<part def>.is_tranquil(part, runtime)`), so
+conditions on a part def's supertypes would be missed; no machine part def has
+a supertype with conditions yet (`Machine` has none), so behaviour is the same
+for now.
+
+**Implemented (2026-10-28):** `PartInstantiation` is a `TranquilityHolder`;
+`PartUsage.visit` collects the usage's own `#Tranquility` constraints (lifting
+step 1b's "ignore" for part usages), and `PartInstantiation.is_tranquil(runtime)`
+evaluates its part def's conditions plus its own, all of which must hold
+(`test_part_usage_carries_its_own_tranquility_condition`).
+`TranquilUpdate.condition()` asks each affected part directly
+(`part.is_tranquil(runtime)`); `PartDef.is_tranquil` refuses with a
+`ValueError`, since only running parts are asked.
 
 ---
 
@@ -884,8 +950,45 @@ of `QuiescentUpdate`'s "all machines settled, mailboxes empty".
    instance; changing a part def's attribute default affects every instance and
    brings back incremental vs. atomic application (Topic 9). Likely two classes,
    e.g. `RedefineAttributeValue` (usage) and `ChangeAttributeDefault` (def).
+   **Decided (2026-10-28), see "Runtime vs. design-time changes" below.**
 2. **Missing redefinition.** If the part usage does not redefine the attribute
    yet (it uses the default), should the update add a redefinition, or raise?
+   **Decided for the prototype: raise** (`LookupError`, listing what the usage
+   does redefine).
+
+## Runtime vs. design-time changes
+
+**Decided (2026-10-28).** The model has two design-time layers above the
+runtime model:
+
+| Layer | Where | Example |
+|---|---|---|
+| Design-time: types | definition packages | `TokenDepoMachine`, its attributes and `#Tranquility` |
+| Configuration of the running system | `Main` | `tokenDepo` at x=20.0 running `tokenDepoMission` |
+| Runtime model | the interpreter's registry, connected to the simulation | `tokenDepo`'s `PartInstantiation`: configured and observed values |
+
+The configuration in `Main` is causally connected to the running parts, so a
+change to it is treated as a **runtime change**: the VM migrates the registry
+and the simulation right away. A runtime change edits **configured** values
+only (e.g. `placementCoordinate`); **observed** values (e.g. `receiverSens`)
+are changed only by the simulation, never by an update. A change to a
+definition is a **design-time change**: it propagates to every usage typed by
+the definition that doesn't redefine the attribute (SysML's rule; to check
+against the spec how `=` and `default =` interact with redefinition).
+
+- **The level is in the update class's name**, e.g.
+  `ChangeRuntimeAttributeValue`. The two levels migrate differently (one part
+  vs. propagation), so they are separate classes, and the name states the
+  scope. A design-time counterpart is added when needed. This revises the
+  earlier idea of one `ChangeAttributeValue` interface for both owners.
+- **What counts as runtime:** an owner the interpreter has a runtime record for
+  (a `PartInstantiation`, an `ExecutableStateUsage`), i.e. what is actually
+  running. Not the package name (`Main` is a convention of this model), and not
+  usage vs. definition alone (usages also occur inside definitions, e.g.
+  `perform action emitToken` in `TokenProducerMachine`).
+- **Scope for now: runtime changes only.** `ChangeRuntimeAttributeValue` rejects
+  a definition owner with a `ValueError` (it's a design-time change, not a
+  missing feature of this class).
 
 ---
 
@@ -999,9 +1102,18 @@ The prototype is built in steps, each test-first (`tests/test_sysmlv2_tranquilit
 - **Part not yet in the simulation** (startup: the simulation has not created
   it yet): the check answers **not tranquil** rather than raising. Tranquility
   cannot be confirmed yet; a later check gives a real answer.
-- **Part def without conditions** (e.g. `ConveyorBeltMachine`): not covered by
-  step 3; the default is decided in step 4. For now `is_tranquil` raises
-  `ValueError`, as a proposal.
+- **Part def without conditions** (e.g. `Common::Machine`): **decided in step 4:
+  always tranquil.** A live update must satisfy both layers, the language safe
+  point and execution tranquility. Leaving out `#Tranquility` is the modeller's
+  choice to accept possible inconsistency in the simulation, so only language
+  safety is enforced: the update still waits for a language safe point, but the
+  tranquility layer is trivially satisfied. Rejected alternatives: *never
+  tranquil* (the update may wait forever) and *error at submission* (overrides
+  the modeller's intent). Consequence: a `#Tranquility` constraint that fails to
+  resolve (e.g. a missing `private import LiveModeling::*;`) now means "always
+  tranquil" instead of an error. No interpreter guard for this: an unresolved
+  name is a static modelling error that the SysML IDE reports while editing (the
+  exporter also warns), so it is left to the modelling tools.
 
 ## Bare attribute names, no `self` or `this`
 
@@ -1278,7 +1390,10 @@ or inspects the runtime model as XMI. To keep the later switch cheap:
   `library package LiveModeling`, placed in part defs. The metadata survives the
   XMI export. **Revised:** unsupported uses are ignored rather than raised on,
   and the exporter doesn't enforce the `annotatedElement` restriction. Ignoring
-  an `assert constraint`: **done**.
+  an `assert constraint`: **done**. Which conditions apply to a part:
+  **resolved by SysML v2 inheritance** (own plus inherited through typing and
+  specialization, minus redefined); the part answers "am I tranquil?" itself
+  (**implemented**, including a part usage's own conditions).
 - Selective tranquility per update (Topic 9): **direction agreed**, scoped to
   part defs for now. Incremental vs. atomic application: **open**, suggested
   start is atomic. How an update states its affected AST nodes: Topic 10.
@@ -1299,8 +1414,8 @@ or inspects the runtime model as XMI. To keep the later switch cheap:
   **Gap:** a part that drops out of a later snapshot keeps its last observed
   values (`refresh_part_values` skips it); nothing removes parts today.
   **Decided:** conditions use bare attribute names, no `self`/`this` (valid
-  SysMLv2, with evidence in Topic 12). **Open (step 4):** the default for part
-  defs without conditions (`is_tranquil` raises `ValueError` for now).
+  SysMLv2, with evidence in Topic 12). **Decided (step 4):** a part def
+  without conditions is always tranquil; only the language safe point applies.
   **Debt:** reflective pyecore mirror plus registry containment fix when XMI
   reflection of the runtime model is needed (today the registry saves to XMI
   as an empty skeleton); attribute lookup by short name breaks under a

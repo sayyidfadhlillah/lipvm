@@ -6166,6 +6166,10 @@ owningFeatureMembership.oclIsKindOf(StakeholderMembership) implies
         record for a PartUsage declared directly under a package/namespace
         (e.g. `cb1 : ConveyorBeltMachine` in Main) — the actual instance of
         a part, as opposed to its PartDefinition (the shared blueprint).
+
+        Collects the usage's own #Tranquility constraints the same way
+        PartDefinition.visit() does; the part's tranquility combines them with
+        its part def's (PartInstantiation.is_tranquil()).
         """
         instantiation = rt.PartInstantiation(
             name=self.declaredName, qualified_name=qualified_name(self), definition=self)
@@ -6175,6 +6179,11 @@ owningFeatureMembership.oclIsKindOf(StakeholderMembership) implies
         instantiation.part_def_origin = _build_reference(_feature_type(self), rt.PartDef.__name__)
         instantiation.attribute_redefinitions = _owned_attribute_redefinitions(
             self, instantiation.qualified_name)
+        instantiation.tranquility_conditions = [
+            _tranquility_condition(feature)
+            for feature in _owned_by_kind(self, FeatureMembership)
+            if _is_tranquility_constraint(feature)
+        ]
         parent.add_part_instantiation(instantiation)
 
 

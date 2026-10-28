@@ -218,9 +218,10 @@ def _publish_and_refresh(vm: VirtualMachine, snapshot: dict) -> None:
 
 
 def _is_tranquil(vm: VirtualMachine, part_usage: str) -> bool:
-    """Asks the part's part def whether that part instance is tranquil now."""
+    """Asks the part instance whether it is tranquil now: it adopts its part
+    def's tranquility conditions and evaluates them against itself."""
     part = vm.state.sysml.lookup_table_part_instantiations.get_reference(part_usage).element_type
-    return _part_def(vm, part.part_def_origin.qualified_name).is_tranquil(part, vm.state)
+    return part.is_tranquil(vm.state)
 
 
 def test_token_depo_is_tranquil_when_no_token_at_receiver():
@@ -268,17 +269,44 @@ def test_part_missing_from_snapshot_is_not_tranquil():
 def test_part_def_without_tranquility_conditions_is_always_tranquil():
     # Step-4 decision: no #Tranquility constraint means the modeller accepts
     # possible inconsistency, so the part is always tranquil.
-    # Every part usage in the model is now typed by a part def with conditions,
-    # so ask `Machine` (the abstract base, no conditions) about cbFeeder.
+    # Every part def in the model has conditions, so remove ConveyorBeltMachine's
+    # from the registry: cbFeeder is then typed by a part def without any, and
+    # is tranquil even while moving.
     vm = _build()
-    cb_feeder = vm.state.sysml.lookup_table_part_instantiations.get_reference(CB_FEEDER).element_type
-    assert _part_def(vm, "Common::Machine").is_tranquil(cb_feeder, vm.state) is True
+    _part_def(vm, "ConveyorBeltSystem::ConveyorBelt::ConveyorBeltMachine").tranquility_conditions.clear()
+    _publish_and_refresh(vm, {CB_FEEDER: _conveyor_belt_values(currentCommand=ConveyorCommandKind.MOVE_TO_SENSOR)})
+    assert _is_tranquil(vm, CB_FEEDER) is True
+
+
+def test_part_usage_carries_its_own_tranquility_condition():
+    # A part adopts its part def's conditions plus its own (Topic 8). Move
+    # `#Tranquility constraint { receiverSens == false }` from TokenDepoMachine
+    # onto the part usage `tokenDepo`: the part now carries it itself.
+    root = load(XMI).contents[0]
+    depo = "TokenDepoSystem::TokenDepo::TokenDepoMachine"
+    [constraint] = [element for element in root.eAllContents()
+                    if isinstance(element, ConstraintUsage) and _owner(element) == depo]
+    [token_depo_usage] = [element for element in root.eAllContents()
+                          if isinstance(element, syntax.PartUsage) and qualified_name(element) == TOKEN_DEPO]
+    membership = constraint.eContainer()
+    membership.eContainer().ownedRelationship.remove(membership)
+    token_depo_usage.ownedRelationship.append(membership)
+
+    vm = _build(root)
+    assert list(_part_def(vm, depo).tranquility_conditions) == []
+    token_depo = vm.state.sysml.lookup_table_part_instantiations.get_reference(TOKEN_DEPO).element_type
+    assert len(token_depo.tranquility_conditions) == 1
+
+    _publish_and_refresh(vm, {TOKEN_DEPO: _token_depo_values(receiverSens=False)})
+    assert _is_tranquil(vm, TOKEN_DEPO) is True
+    _publish_and_refresh(vm, {TOKEN_DEPO: _token_depo_values(receiverSens=True)})
+    assert _is_tranquil(vm, TOKEN_DEPO) is False
 
 
 # --- Step 4: tranquility-gated updates ---
-# Written ahead of the implementation. `updates.ChangeAttributeValue` is looked
-# up on the module inside each test, so that until it exists each test fails
-# on its own rather than the whole module failing to collect.
+# Written ahead of the implementation. `updates.ChangeRuntimeAttributeValue`
+# is looked up on the module inside each test, so that until it exists each
+# test fails on its own rather than the whole module failing to collect.
 
 def _factory_coordinate(x: float, y: float, degrees: float) -> rt.CompositeCustomValue:
     """A registry value for `placementCoordinate`, shaped like the ones the
@@ -290,13 +318,13 @@ def _factory_coordinate(x: float, y: float, degrees: float) -> rt.CompositeCusto
                   for name, value in (("x", x), ("y", y), ("degrees", degrees))])
 
 
-def test_change_attribute_value_waits_until_the_part_is_tranquil():
+def test_change_runtime_attribute_value_waits_until_the_part_is_tranquil():
     # Valentin's pattern (tests/test_sysmlv2_updates.py): hand the update to
     # the VM directly, step to the StateUsage before-checkpoint, and check
     # whether it is still pending. The condition here is tokenDepo's
     # tranquility (`receiverSens == false`) instead of quiescence.
     vm = _build()
-    update = updates.ChangeAttributeValue(
+    update = updates.ChangeRuntimeAttributeValue(
         owner=TOKEN_DEPO, attribute="placementCoordinate",
         new_value=_factory_coordinate(x=25.0, y=35.0, degrees=270.0))
     vm._pending_update = update
@@ -321,14 +349,14 @@ def _placement_coordinate(vm: VirtualMachine, part_usage: str) -> dict:
     return {argument.name: argument.value.el for argument in redefinition.value.elements}
 
 
-def test_change_attribute_value_replaces_the_redefinition_value():
+def test_change_runtime_attribute_value_replaces_the_redefinition_value():
     # VM side of the update: once applied, tokenDepo's
     # `attribute :>> placementCoordinate { x = 20.0; ... }` holds the new values.
     vm = _build()
     assert _placement_coordinate(vm, TOKEN_DEPO) == {"x": "20.0", "y": "35.0", "degrees": "270.0"}
 
     _publish_and_refresh(vm, {TOKEN_DEPO: _token_depo_values(receiverSens=False)})
-    vm._pending_update = updates.ChangeAttributeValue(
+    vm._pending_update = updates.ChangeRuntimeAttributeValue(
         owner=TOKEN_DEPO, attribute="placementCoordinate",
         new_value=_factory_coordinate(x=25.0, y=35.0, degrees=270.0))
     vm.step()

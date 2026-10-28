@@ -288,31 +288,17 @@ class TranquilityHolder(RuntimeStateElement, metaclass=MetaEClass):
     conditions: the built expressions of the #Tranquility constraints a
     modeller wrote on the corresponding AST element (see
     Language-Safe-and-Execution-Tranquility-points.md, Topic 11). A hot update
-    may only be applied while they hold. Extended by PartDef for now.
+    may only be applied while they hold. Extended by PartDef and
+    PartInstantiation (a part usage's own constraints).
     """
     tranquility_conditions = EReference(eType=Value, lower=0, upper=-1, containment=True)
 
-    def is_tranquil(self, instance, runtime: RuntimeState) -> bool:
-        """Whether `instance` (e.g. a PartInstantiation of this PartDef) is
-        tranquil right now: every tranquility condition holds against its
-        observed values. While evaluating, `instance` is the execution
-        context's current_part, which bare attribute names in a condition
-        (e.g. `receiverSens`) resolve against; it is cleared afterwards.
-
-        Not tranquil if the instance has no observed values yet (the
-        simulation hasn't published it): tranquility can't be confirmed.
-        A definition without conditions is always tranquil: leaving out
-        #Tranquility is the modeller's choice, so only the language safe point
-        applies (see Language-Safe-and-Execution-Tranquility-points.md, step 4).
+    def is_tranquil(self, runtime: RuntimeState) -> bool:
+        """Whether this element is tranquil right now. Only running elements
+        answer (PartInstantiation); a definition holds conditions but isn't
+        asked (PartDef refuses).
         """
-        context = runtime.execution_context
-        context.current_part = instance
-        try:
-            return all(bool(condition.evaluate(runtime)) for condition in self.tranquility_conditions)
-        except PartNotReadyError:
-            return False
-        finally:
-            context.current_part = None
+        raise NotImplementedError("Subclasses has to implement this")
 
 class Record(ElementDefinition, metaclass=MetaEClass):
     element_type = EReference(eType=ElementDefinition, lower=1, upper=1, containment=False)
@@ -921,6 +907,12 @@ class PartDef(ElementDefinition, TranquilityHolder, metaclass=MetaEClass):
     contained_perform_actions = EReference(eType=ActualAction, lower=0, upper=-1, containment=True)
     attributes = EReference(eType=AttributeUsageElement, lower=0, upper=-1, containment=True)
 
+    def is_tranquil(self, runtime: RuntimeState) -> bool:
+        """Refuses: a definition has no observed values, so its conditions
+        are evaluated on each part typed by it (PartInstantiation.is_tranquil).
+        """
+        raise ValueError('Tranquility of Part Def should be checked at its corresponding PartInstantiation instances')
+
 class CompositeCustomValue(Value):
     """A structured value made of named sub-values (e.g. placementCoordinate's
     `{x: 10.0, y: 0.0}`), rather than a single literal or reference. Reusable
@@ -1012,7 +1004,7 @@ def _custom_attribute_value(value: "CompositeCustomValue"):
     }
     return class_name, values
 
-class PartInstantiation(ElementDefinition, metaclass=MetaEClass):
+class PartInstantiation(ElementDefinition, TranquilityHolder, metaclass=MetaEClass):
 
     # Reference to the PartDef this usage is typed by
     part_def_origin = EReference(eType=Reference, lower=0, upper=1, containment=False)
@@ -1042,6 +1034,49 @@ class PartInstantiation(ElementDefinition, metaclass=MetaEClass):
                 f"{self.qualified_name!r} has no observed values yet -- the simulation "
                 f"hasn't published it, so {name!r} can't be read.")
         return self.observed_values[name]
+
+    def is_tranquil(self, runtime: RuntimeState) -> bool:
+        """Whether this part is tranquil right now: every tranquility
+        condition it carries holds against its own observed values. It
+        carries its part def's conditions (a usage inherits its definition's
+        features) plus its own, from #Tranquility constraints in the part
+        usage; they accumulate, so all of them must hold. While
+        evaluating, this part is the execution context's current_part, which
+        bare attribute names in a condition (e.g. `receiverSens`) resolve
+        against; it is cleared afterwards.
+
+        Not tranquil while it has no observed values yet (the simulation
+        hasn't published it): tranquility can't be confirmed. A part without
+        any conditions (none on its part def, none of its own) is always
+        tranquil: leaving out #Tranquility is the modeller's choice, so only
+        the language safe point applies (see
+        Language-Safe-and-Execution-Tranquility-points.md, step 4). Conditions
+        on the part def's supertypes are not followed yet
+        (ARCHITECTURAL-CONFUSION.md, Topic 5).
+        """
+        record = runtime.sysml.lookup_table_part_defs.get_reference(self.part_def_origin.qualified_name)
+        if record is None:
+            raise LookupError(
+                f"{self.qualified_name!r} is typed by {self.part_def_origin.qualified_name!r}, "
+                f"which isn't a registered PartDef.")
+
+        # Tranquility conditions shared from the Part Def
+        conditions_from_part_def = record.element_type.tranquility_conditions
+
+        # Its own tranquility condition (if there is any)
+        conditions_from_self = self.tranquility_conditions
+
+        # Compounding both tranquility conditions
+        conditions = [*conditions_from_part_def, *conditions_from_self]
+
+        context = runtime.execution_context
+        context.current_part = self
+        try:
+            return all(bool(condition.evaluate(runtime)) for condition in conditions)
+        except PartNotReadyError:
+            return False
+        finally:
+            context.current_part = None
 
     def evaluate(self, runtime: RuntimeState):
         """Ensures this usage's live simulation counterpart exists, via
