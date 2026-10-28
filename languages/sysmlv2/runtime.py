@@ -301,13 +301,10 @@ class TranquilityHolder(RuntimeStateElement, metaclass=MetaEClass):
 
         Not tranquil if the instance has no observed values yet (the
         simulation hasn't published it): tranquility can't be confirmed.
-        Raises if there are no conditions at all, rather than silently
-        picking a default (to be decided when updates use this).
+        A definition without conditions is always tranquil: leaving out
+        #Tranquility is the modeller's choice, so only the language safe point
+        applies (see Language-Safe-and-Execution-Tranquility-points.md, step 4).
         """
-        if not self.tranquility_conditions:
-            raise ValueError(
-                f"{instance.qualified_name!r}: its definition has no tranquility conditions, "
-                f"so whether it is tranquil is undefined.")
         context = runtime.execution_context
         context.current_part = instance
         try:

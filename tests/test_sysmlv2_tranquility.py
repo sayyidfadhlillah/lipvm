@@ -10,8 +10,6 @@ failing to collect.
 
 import types
 
-import pytest
-
 from core.language import Scenario
 from core.vm import VirtualMachine
 
@@ -265,12 +263,11 @@ def test_part_missing_from_snapshot_is_not_tranquil():
     assert _is_tranquil(vm, TOKEN_DEPO) is False
 
 
-def test_part_def_without_tranquility_conditions_raises():
-    # Proposal, pending the step-4 decision on a default (always tranquil,
-    # never tranquil, or error): refuse to answer rather than pick one silently.
+def test_part_def_without_tranquility_conditions_is_always_tranquil():
+    # Step-4 decision: no #Tranquility constraint means the modeller accepts
+    # possible inconsistency, so the part is always tranquil.
     # Every part usage in the model is now typed by a part def with conditions,
     # so ask `Machine` (the abstract base, no conditions) about cbFeeder.
     vm = _build()
     cb_feeder = vm.state.sysml.lookup_table_part_instantiations.get_reference(CB_FEEDER).element_type
-    with pytest.raises(ValueError, match="no tranquility conditions"):
-        _part_def(vm, "Common::Machine").is_tranquil(cb_feeder, vm.state)
+    assert _part_def(vm, "Common::Machine").is_tranquil(cb_feeder, vm.state) is True
