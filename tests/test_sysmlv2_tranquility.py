@@ -15,6 +15,8 @@ from core.vm import VirtualMachine
 
 from languages.sysmlv2 import runtime as rt
 from languages.sysmlv2 import syntax
+from languages.sysmlv2 import updates
+from languages.sysmlv2.runtime_utility import ScalarType, TypeKind
 from languages.sysmlv2.simulation_models.fischertechnik.enums import ConveyorCommandKind
 from languages.sysmlv2.syntax import AssertConstraintUsage, ConstraintUsage
 from languages.sysmlv2.sysml_utility_classes import qualified_name
@@ -271,3 +273,65 @@ def test_part_def_without_tranquility_conditions_is_always_tranquil():
     vm = _build()
     cb_feeder = vm.state.sysml.lookup_table_part_instantiations.get_reference(CB_FEEDER).element_type
     assert _part_def(vm, "Common::Machine").is_tranquil(cb_feeder, vm.state) is True
+
+
+# --- Step 4: tranquility-gated updates ---
+# Written ahead of the implementation. `updates.ChangeAttributeValue` is looked
+# up on the module inside each test, so that until it exists each test fails
+# on its own rather than the whole module failing to collect.
+
+def _factory_coordinate(x: float, y: float, degrees: float) -> rt.CompositeCustomValue:
+    """A registry value for `placementCoordinate`, shaped like the ones the
+    build pass makes from `attribute :>> placementCoordinate { ... }`."""
+    return rt.CompositeCustomValue(
+        type=rt.TypeRef(kind=TypeKind.CUSTOM, reference_type=rt.Reference(
+            qualified_name="Common::FactoryCoordinate", reference_type="CustomAttributeDefinition")),
+        elements=[rt.Argument(name=name, value=rt.LiteralValue(el=str(value), scalar_type=ScalarType.REAL))
+                  for name, value in (("x", x), ("y", y), ("degrees", degrees))])
+
+
+def test_change_attribute_value_waits_until_the_part_is_tranquil():
+    # Valentin's pattern (tests/test_sysmlv2_updates.py): hand the update to
+    # the VM directly, step to the StateUsage before-checkpoint, and check
+    # whether it is still pending. The condition here is tokenDepo's
+    # tranquility (`receiverSens == false`) instead of quiescence.
+    vm = _build()
+    update = updates.ChangeAttributeValue(
+        owner=TOKEN_DEPO, attribute="placementCoordinate",
+        new_value=_factory_coordinate(x=25.0, y=35.0, degrees=270.0))
+    vm._pending_update = update
+
+    # A token at the receiver: not tranquil, so the update is held back.
+    _publish_and_refresh(vm, {TOKEN_DEPO: _token_depo_values(receiverSens=True)})
+    vm.step()
+    assert vm._pending_update is update
+
+    # The receiver is free: tranquil, so the update is applied at the next
+    # checkpoint.
+    _publish_and_refresh(vm, {TOKEN_DEPO: _token_depo_values(receiverSens=False)})
+    vm.step()
+    assert vm._pending_update is None
+
+
+def _placement_coordinate(vm: VirtualMachine, part_usage: str) -> dict:
+    """The part usage's `placementCoordinate` redefinition in the registry, as
+    {sub-attribute name: literal}."""
+    part = vm.state.sysml.lookup_table_part_instantiations.get_reference(part_usage).element_type
+    [redefinition] = [r for r in part.attribute_redefinitions if r.name == "placementCoordinate"]
+    return {argument.name: argument.value.el for argument in redefinition.value.elements}
+
+
+def test_change_attribute_value_replaces_the_redefinition_value():
+    # VM side of the update: once applied, tokenDepo's
+    # `attribute :>> placementCoordinate { x = 20.0; ... }` holds the new values.
+    vm = _build()
+    assert _placement_coordinate(vm, TOKEN_DEPO) == {"x": "20.0", "y": "35.0", "degrees": "270.0"}
+
+    _publish_and_refresh(vm, {TOKEN_DEPO: _token_depo_values(receiverSens=False)})
+    vm._pending_update = updates.ChangeAttributeValue(
+        owner=TOKEN_DEPO, attribute="placementCoordinate",
+        new_value=_factory_coordinate(x=25.0, y=35.0, degrees=270.0))
+    vm.step()
+
+    assert vm._pending_update is None
+    assert _placement_coordinate(vm, TOKEN_DEPO) == {"x": "25.0", "y": "35.0", "degrees": "270.0"}
