@@ -207,6 +207,7 @@ package ConveyorBeltSystem {
     private import ScalarValues::*;
     private import Common::*;
     private import Common::Messages::*;
+    private import LiveModeling::*;
 
     package ConveyorBeltCommands {
         enum def ConveyorCommandKind {
@@ -267,6 +268,10 @@ package ConveyorBeltSystem {
             attribute conveyorSensSwap : Boolean;
             attribute conveyorSensImpulse : Integer;
             attribute placementCoordinate : FactoryCoordinate;
+
+            #Tranquility constraint {
+                currentCommand == ConveyorCommandKind::STOP
+            }
         }
     } // package ConveyorBelt
 

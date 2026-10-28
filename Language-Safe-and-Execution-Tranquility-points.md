@@ -1154,6 +1154,13 @@ Until Part B, `when` conditions read the snapshot while tranquility reads the
 copied values, so within one round they may see slightly different moments;
 acceptable for the prototype.
 
+**Part B done.** `AttributeReference.evaluate` reads
+`PartInstantiation.observed_value(name)`; `ExecutionContext.current_snapshot`
+and `SimulationBridge.read_attribute_from_snapshot` are removed, and
+`ExecutionContext.begin()` only records the running state machine. `when`
+conditions and tranquility now read the same values within a round. No existing
+test relied on the per-machine snapshot.
+
 ## Representation of the copied values: a mirror, separate from configuration
 
 The copied values are a **mirror**: each round they reflect what the simulation
@@ -1226,6 +1233,11 @@ or inspects the runtime model as XMI. To keep the later switch cheap:
    and work unchanged with either representation.
 3. **Recorded debt:** reflective pyecore mirror plus the registry containment fix
    (points 1–3 above), when XMI reflection of the runtime model becomes a goal.
+4. **Declared, not ad hoc.** The dict lives in a declared pyecore attribute,
+   `PartInstantiation.observed_values` (`EAttribute` of the `ObservedValues`
+   data type, `eType=dict`, `transient=True`), not a plain attribute assigned in
+   `__init__`. The structure is visible in the class and in its `eClass`, pyecore
+   rejects non-dict values, and `transient` states that it isn't saved.
 
 ## Open points
 
@@ -1280,8 +1292,12 @@ or inspects the runtime model as XMI. To keep the later switch cheap:
   core interface, discussion with Valentin, and sequencing with steps 2–3:
   **open**.
 - Evaluation and attribute values (Topic 12): steps 1–3 **done**, Part A
-  **done**, Part B **open**. **Decided:** copied values as a plain dict behind
+  **done**, Part B **done** (`AttributeReference` reads `observed_value`;
+  `ExecutionContext` no longer captures a snapshot). **Decided:** copied values
+  as a plain dict in a declared, transient attribute, behind
   `PartInstantiation.observed_value(name)`, tests going through the refresh.
+  **Gap:** a part that drops out of a later snapshot keeps its last observed
+  values (`refresh_part_values` skips it); nothing removes parts today.
   **Decided:** conditions use bare attribute names, no `self`/`this` (valid
   SysMLv2, with evidence in Topic 12). **Open (step 4):** the default for part
   defs without conditions (`is_tranquil` raises `ValueError` for now).

@@ -17,6 +17,7 @@ from core.vm import VirtualMachine
 
 from languages.sysmlv2 import runtime as rt
 from languages.sysmlv2 import syntax
+from languages.sysmlv2.simulation_models.fischertechnik.enums import ConveyorCommandKind
 from languages.sysmlv2.syntax import AssertConstraintUsage, ConstraintUsage
 from languages.sysmlv2.sysml_utility_classes import qualified_name
 
@@ -55,6 +56,7 @@ def test_part_defs_with_tranquility_constraints_are_still_registered():
     assert "TokenProducerSystem::TokenProducer::TokenProducerMachine" in part_defs
     assert "TokenDepoSystem::TokenDepo::TokenDepoMachine" in part_defs
     assert "VacuumGripperSystem::VacuumGripper::VacuumGripperMachine" in part_defs
+    assert "ConveyorBeltSystem::ConveyorBelt::ConveyorBeltMachine" in part_defs
 
 
 def test_tranquility_metadata_definition_is_not_registered_as_item_def():
@@ -63,11 +65,12 @@ def test_tranquility_metadata_definition_is_not_registered_as_item_def():
     assert "LiveModeling::Tranquility" not in item_defs
 
 
-def test_recognises_the_three_part_def_tranquility_constraints():
+def test_recognises_the_four_part_def_tranquility_constraints():
     root = load(XMI).contents[0]
     tranquility = [element for element in root.eAllContents()
                    if isinstance(element, ConstraintUsage) and syntax._is_tranquility_constraint(element)]
     assert sorted(_owner(constraint) for constraint in tranquility) == [
+        "ConveyorBeltSystem::ConveyorBelt::ConveyorBeltMachine",
         "TokenDepoSystem::TokenDepo::TokenDepoMachine",
         "TokenProducerSystem::TokenProducer::TokenProducerMachine",
         "VacuumGripperSystem::VacuumGripper::VacuumGripperMachine",
@@ -84,6 +87,20 @@ def _assert_comparison(condition, attribute_qualified_name: str, operator: str, 
     assert condition.left.el.qualified_name == attribute_qualified_name
     assert isinstance(condition.right, rt.LiteralValue)
     assert condition.right.el == literal
+
+
+def _assert_enum_comparison(condition, attribute_qualified_name: str, operator: str,
+                            enum_literal_qualified_name: str) -> None:
+    """`condition` is `<attribute> <operator> <enum literal>`, e.g.
+    `currentCommand == ConveyorCommandKind::STOP`: an enum literal is a
+    reference to the enum member, not a LiteralValue."""
+    assert isinstance(condition, rt.BinaryExpression)
+    assert condition.operator == operator
+    assert isinstance(condition.left, rt.ReferenceValue)
+    assert condition.left.el.qualified_name == attribute_qualified_name
+    assert isinstance(condition.right, rt.ReferenceValue)
+    assert condition.right.el.reference_type == "EnumerationUsage"
+    assert condition.right.el.qualified_name == enum_literal_qualified_name
 
 
 def _conjuncts(condition) -> list:
@@ -118,9 +135,16 @@ def test_part_defs_carry_their_tranquility_condition():
     _assert_comparison(comparisons[3], f"{vgr}::vacuumActCompressorOn", "==", "False")
     _assert_comparison(comparisons[4], f"{vgr}::vacuumActValve", "==", "False")
 
+    # `#Tranquility constraint { currentCommand == ConveyorCommandKind::STOP }`
+    cb = "ConveyorBeltSystem::ConveyorBelt::ConveyorBeltMachine"
+    [condition] = _part_def(vm, cb).tranquility_conditions
+    _assert_enum_comparison(condition, f"{cb}::currentCommand", "==",
+                            "ConveyorBeltSystem::ConveyorBeltCommands::ConveyorCommandKind::STOP")
+
 
 def test_part_def_without_tranquility_constraint_has_no_condition():
-    part_def = _part_def(_build(), "ConveyorBeltSystem::ConveyorBelt::ConveyorBeltMachine")
+    # `part def Machine;`, the abstract base of every machine.
+    part_def = _part_def(_build(), "Common::Machine")
     assert list(part_def.tranquility_conditions) == []
 
 
@@ -149,6 +173,7 @@ def test_asserted_tranquility_constraint_is_ignored():
 
 TOKEN_DEPO = "Main::tokenDepo"
 VGR = "Main::vgrPickProducer"
+CB_FEEDER = "Main::cbFeeder"
 
 
 def _token_depo_values(**overrides) -> types.SimpleNamespace:
@@ -167,6 +192,17 @@ def _vgr_values(**overrides) -> types.SimpleNamespace:
                   expectedVerticalEncoderValue=0.0, expectedArmEncoderValue=0.0,
                   expectedRotationEncoderValue=0.0,
                   vacuumActCompressorOn=False, vacuumActValve=False, placementCoordinate=None)
+    values.update(overrides)
+    return types.SimpleNamespace(**values)
+
+
+def _conveyor_belt_values(**overrides) -> types.SimpleNamespace:
+    """A complete simulation-side value object for a ConveyorBeltMachine,
+    stopped unless overridden."""
+    values = dict(currentCommand=ConveyorCommandKind.STOP, direction=None,
+                  currentStepCount=0, targetStepCount=0,
+                  conveyorSensFeed=False, conveyorSensSwap=False, conveyorSensImpulse=0,
+                  placementCoordinate=None)
     values.update(overrides)
     return types.SimpleNamespace(**values)
 
@@ -213,6 +249,14 @@ def test_vgr_is_tranquil_only_at_home_with_vacuum_off():
     assert _is_tranquil(vm, VGR) is False
 
 
+def test_conveyor_belt_is_tranquil_only_when_stopped():
+    vm = _build()
+    _publish_and_refresh(vm, {CB_FEEDER: _conveyor_belt_values()})
+    assert _is_tranquil(vm, CB_FEEDER) is True
+    _publish_and_refresh(vm, {CB_FEEDER: _conveyor_belt_values(currentCommand=ConveyorCommandKind.MOVE_TO_SENSOR)})
+    assert _is_tranquil(vm, CB_FEEDER) is False
+
+
 def test_part_missing_from_snapshot_is_not_tranquil():
     # Startup: the simulation hasn't created the part yet, so it has no
     # observed values and tranquility can't be confirmed.
@@ -224,6 +268,9 @@ def test_part_missing_from_snapshot_is_not_tranquil():
 def test_part_def_without_tranquility_conditions_raises():
     # Proposal, pending the step-4 decision on a default (always tranquil,
     # never tranquil, or error): refuse to answer rather than pick one silently.
+    # Every part usage in the model is now typed by a part def with conditions,
+    # so ask `Machine` (the abstract base, no conditions) about cbFeeder.
     vm = _build()
+    cb_feeder = vm.state.sysml.lookup_table_part_instantiations.get_reference(CB_FEEDER).element_type
     with pytest.raises(ValueError, match="no tranquility conditions"):
-        _is_tranquil(vm, "Main::cbFeeder")
+        _part_def(vm, "Common::Machine").is_tranquil(cb_feeder, vm.state)
