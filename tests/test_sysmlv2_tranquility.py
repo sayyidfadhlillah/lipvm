@@ -355,11 +355,24 @@ def test_change_runtime_attribute_value_replaces_the_redefinition_value():
     vm = _build()
     assert _placement_coordinate(vm, TOKEN_DEPO) == {"x": "20.0", "y": "35.0", "degrees": "270.0"}
 
-    _publish_and_refresh(vm, {TOKEN_DEPO: _token_depo_values(receiverSens=False)})
-    vm._pending_update = updates.ChangeRuntimeAttributeValue(
-        owner=TOKEN_DEPO, attribute="placementCoordinate",
-        new_value=_factory_coordinate(x=25.0, y=35.0, degrees=270.0))
+    # Imagine if the token depo still hold a token
+    _publish_and_refresh(vm, {TOKEN_DEPO: _token_depo_values(receiverSens=True)})
     vm.step()
 
+    # Then comes the update
+    vm._pending_update = updates.ChangeRuntimeAttributeValue(
+        owner=TOKEN_DEPO, attribute="placementCoordinate",
+        new_value=_factory_coordinate(x=25.0, y=30.0, degrees=180.0))
+    vm.step()
+
+    # At this point, the update should still exist
+    assert vm._pending_update is not None
+    assert _placement_coordinate(vm, TOKEN_DEPO) == {"x": "20.0", "y": "35.0", "degrees": "270.0"}
+
+    # Then, assume the token held token depo now is picked up by the gripper
+    _publish_and_refresh(vm, {TOKEN_DEPO: _token_depo_values(receiverSens=False)})
+    vm.step()
+
+    # At this point now, the update should be applied
     assert vm._pending_update is None
-    assert _placement_coordinate(vm, TOKEN_DEPO) == {"x": "25.0", "y": "35.0", "degrees": "270.0"}
+    assert _placement_coordinate(vm, TOKEN_DEPO) == {"x": "25.0", "y": "30.0", "degrees": "180.0"}
