@@ -821,6 +821,50 @@ This still needs version support in the registry for the incremental kind.
 Suggested starting point: **atomic**, with incremental application as a later
 extension. Not yet decided.
 
+## Atomic application of a list of updates
+
+**Decided (2026-10-28).** The demonstrator applies a **list** of update scripts
+(Topic 10, "Syncing a runtime change to the simulation") **atomically**: all of
+them at one checkpoint, and the VM continues only afterwards. The alternative,
+applying them one after another, lets the running system see the intermediate
+states (e.g. the depot moved but the conveyor feeding it not yet), the same
+version-consistency problem as above, between updates instead of within one
+part.
+
+**The list is itself one update** (composite pattern), so the VM needs no change
+for atomicity: it holds one pending update, and that update is the group.
+
+```python
+AtomicUpdate([
+    ChangeRuntimeAttributeValue(owner="Main::tokenDepo", ...),
+    ChangeRuntimeAttributeValue(owner="Main::cbTransport", ...),
+])
+```
+
+- `checkpoint_type()`: `StateUsage`, like its members (inherited from
+  `SysmlUpdate`).
+- `affected_parts()`: the union of its members' affected parts, without
+  duplicates.
+- `condition()`: inherited from `TranquilUpdate`, so true only when **all**
+  affected parts are tranquil at the same checkpoint. The cost noted above
+  remains: the more parts, the longer the wait, possibly forever.
+- `apply()`: migrates every member, then syncs once.
+
+Two details make it truly atomic:
+
+1. **No partial application.** Every member is checked first (e.g. the part
+   usage redefines the attribute), and only then are the members migrated. A
+   member that would fail makes the group raise before anything changed.
+2. **One message to the simulation.** The simulation runs on its own thread and
+   drains its queues each frame, so separate `set_attribute` commands could be
+   split across frames. The group's sync sends **one** command carrying every
+   affected part's new values, applied in one frame.
+
+**VM changes, only for the live demo:** handing the update over to the
+interpreter thread (`VirtualMachine.update()` calls `stop()` then `run()` on the
+calling thread), and, only if several groups are applied one after another, more
+than the single pending slot. One atomic list per run fits the single slot.
+
 ---
 
 # Topic 10 — What an update targets, and construct-level SysMLv2 updates
@@ -989,6 +1033,161 @@ against the spec how `=` and `default =` interact with redefinition).
 - **Scope for now: runtime changes only.** `ChangeRuntimeAttributeValue` rejects
   a definition owner with a `ValueError` (it's a design-time change, not a
   missing feature of this class).
+
+## Syncing a runtime change to the simulation
+
+**Decided (2026-10-28).** The runtime model is causally connected to the
+simulation in both directions:
+
+| Direction | What changes | Who reacts |
+|---|---|---|
+| simulation → runtime model | observed values (e.g. `receiverSens`) | `refresh_part_values`, once per round (Topic 12) |
+| runtime model → simulation | configured values (e.g. `placementCoordinate`) | pyecore change notifications, pushed after an update is applied (below) |
+
+**Revised (2026-10-28).** An earlier version of this section rejected pyecore
+observers in favour of syncing `affected_parts()` after `apply()`; that was a
+misreading of the agreed design. The design uses pyecore's notification
+mechanism:
+
+1. **Observe:** pyecore observers (`EObserver`) are attached to each part's
+   configured values.
+2. **Collect during the update:** a notification only records which part
+   changed, by walking up `eContainer()` to the owning `PartInstantiation`.
+   Nothing is sent yet.
+3. **Push after the update is applied:** once the VM has found the update
+   applicable (language safe point and tranquility) and run `apply()`, the
+   changed parts' **current** configured values are sent to the simulation in
+   one go, in the same `(class_name, values)` shape as at instantiation.
+
+- **Update classes only change the runtime model.** They don't call the
+  simulation bridge.
+- **Commands follow what changed, not which update class ran.** Everything
+  collected during one update goes out as one batch, which is also what an
+  `AtomicUpdate` needs (Topic 9: one message, applied in one frame).
+
+Checked in pyecore: replacing a value (`redefinition.value = new_value`, what
+`ChangeRuntimeAttributeValue` does) fires a `SET` notification on the
+`AttributeRedefinition`; changing a nested value in place (e.g. a
+`LiteralValue`'s `el` inside the `CompositeCustomValue`) fires nothing on the
+redefinition, only on the nested object itself.
+
+**Decided:**
+
+- **Observe only configured values, never `observed_values`.**
+  `refresh_part_values` replaces every part's `observed_values` each round; an
+  observer on the whole `PartInstantiation` would fire every round and push the
+  simulation's own values back to it. Observers watch only the
+  `attribute_redefinitions` subtree.
+- ~~**Observe nested values, and anything new.**~~ **Revised (2026-10-28):
+  updates always replace values; observers only on `AttributeRedefinition`s.**
+  A change to a configured value is always a replacement of the
+  redefinition's `value` (`redefinition.value = new_value`), for composite and
+  scalar values alike, never an in-place edit of a nested object (e.g.
+  `literal.el = "25.0"`). `ChangeRuntimeAttributeValue` already works this way.
+  So each `AttributeRedefinition` gets one observer watching its `value`, and
+  nested objects need none; new value objects need no observers either, since
+  the next change to them is again a replacement. **Rule for update classes:**
+  never change a configured value in place; nothing enforces it, and an
+  in-place change would not reach the simulation. In-place changes are not
+  covered until an update class needs them (then nested observers would be
+  added).
+- ~~**Observers sit on `AttributeRedefinition`s, not on the part.**~~
+  **Revised (2026-10-28): one self-maintaining observer per part.** pyecore
+  0.15.2 has no `EContentAdapter` (EMF's observer that attaches itself to new
+  contents), only `EObserver`, and notifications don't bubble up: an observer
+  on the `PartInstantiation` misses `redefinition.value` being set, yet fires
+  every round when `refresh_part_values` sets `observed_values` (both
+  checked). So a small adapter of our own, limited to this path, covers today's
+  case and added redefinitions with one mechanism:
+
+  | It watches | Notification | Reaction |
+  |---|---|---|
+  | the `PartInstantiation` | `ADD` on `attribute_redefinitions` | attach itself to the new redefinition, record `(part, attribute) = redefinition.value` |
+  | the `PartInstantiation` | anything else (e.g. `SET` on `observed_values`) | ignore |
+  | each `AttributeRedefinition` | `SET` on `value` | record `(part, attribute) = notification.new` |
+
+  Checked in pyecore: appending a redefinition fires
+  `('attribute_redefinitions', 'ADD', ...)` on the part's observer; setting
+  `observed_values` fires `('observed_values', 'SET', ...)`, which the filter
+  drops. The risk of sending the simulation's own values back is confined to
+  this one filter, and guarded by
+  `test_applied_update_sends_one_batch_with_the_changed_configured_values`
+  (other parts' refreshed observed values must not appear in the batch).
+- **Attached once, after the registry is built**, when the interpreter-side
+  bridge object is created (next to the channel in `Namespace.evaluate`): the
+  observer is attached to each part and its existing redefinitions. Attaching
+  during the build (`PartUsage.visit`) is not possible (the bridge object
+  doesn't exist yet) and would record every startup value as a change. From
+  then on the observer maintains itself.
+- **Not covered, later (major changes anyway):** adding or removing whole
+  `PartInstantiation`s, which also needs creating or removing the machine in
+  the simulation, not just updating it. Removing a redefinition is not handled
+  either; no update does that.
+- **Each observer is given its part when attached**, rather than walking up
+  `eContainer()` when it fires: simpler, and it still works for an object that
+  has been detached from the tree. A redefinition belongs to exactly one part
+  and never moves to another.
+- **The record is a dictionary `{(part, attribute): new value}`**, filled from
+  the notification (`notification.new`, which by the replacement rule is the
+  value object the redefinition now holds). A second change to the same
+  `(part, attribute)` overwrites the first, so the last (current) value wins;
+  different attributes of one part are separate keys. `flush` converts each
+  value (`_custom_attribute_value`, as at instantiation), groups them by part
+  into one batch (`{qualified_name: {attribute: (class_name, values)}}`), and
+  empties the record. Only changed attributes are sent, never a part's
+  unchanged ones. **With nothing recorded, `flush` sends nothing** (no empty
+  batch), e.g. after an update that only changes interpreter-side things: a
+  batch on the queue always means changes to apply.
+- **Only `PartInstantiation`s get observers, not every `TranquilityHolder`.**
+  The notification answers "must the simulation hear about this change?", and
+  only elements with a counterpart in the simulation need it: today, parts.
+  Tranquility answers a different question ("may this be changed now?"), so
+  tying the notification to `TranquilityHolder` would couple two unrelated
+  concerns. `PartDef` in particular has no simulation counterpart; a change to
+  it is a design-time change (out of scope), which would propagate to the parts
+  that don't redefine the attribute, and those parts would notify the
+  simulation. Changes to `#Tranquility` conditions don't concern the
+  simulation either: only the interpreter reads them. A shared "connected to
+  the simulation" base class is left until a second such element exists.
+
+**Decided: the bridge collects and sends; the caller decides when.** Options
+considered for who pushes the collected changes:
+
+1. the SysML update class (`TranquilUpdate.apply()`, after the migration);
+2. the core VM (`_apply_pending_update`, after `update.apply()`; Valentin's
+   code);
+3. the simulation bridge, which already owns all other communication with the
+   simulation (`instantiate`, `call_action`, `emit_event`). The bridge can't
+   know by itself when an update has finished, so:
+   - 3a: send on each notification. **Rejected:** changes go out one by one
+     during `apply()`, possibly across frames, which breaks the batch an
+     `AtomicUpdate` needs.
+   - 3b: collect, and send at the bridge's own moment in the round (the start
+     of `read_events_and_execute`, next to `refresh_part_values`): symmetric
+     with observed values, but later (the next round, roughly 0.1-0.2 s with 7
+     state machines at 0.02 s per step), widening the gap between the
+     tranquility check and the change.
+   - **3c (chosen):** collect, and send when told (`flush`).
+
+With 3c the bridge owns the collecting and the sending, update classes and the
+VM know nothing about the simulation, and **when** to send is only where
+`flush` is called:
+
+- **now:** right after the migration, in `TranquilUpdate.apply()`, so the
+  change reaches the simulation as close to the tranquility check as possible;
+- **3b remains possible** by calling `flush` at the start of the round instead,
+  with no change to the bridge.
+
+**Where the collected list lives:** on the interpreter side only. Today
+`SimulationBridge` holds no state (static methods) and `ThreadChannel` is shared
+between the two threads, so the list needs its own interpreter-side object (e.g.
+a bridge instance in the runtime state), not the shared channel.
+
+**Demonstrator rule: live changes come only from update scripts.** There is no
+IDE turning edits of the `.sysml` model into updates; the demonstrator applies a
+list of update scripts built from the update classes. Any change to configured
+values outside an update is ignored. This is what makes the sync after an
+update complete: nothing else changes configured values.
 
 ---
 
@@ -1395,8 +1594,10 @@ or inspects the runtime model as XMI. To keep the later switch cheap:
   specialization, minus redefined); the part answers "am I tranquil?" itself
   (**implemented**, including a part usage's own conditions).
 - Selective tranquility per update (Topic 9): **direction agreed**, scoped to
-  part defs for now. Incremental vs. atomic application: **open**, suggested
-  start is atomic. How an update states its affected AST nodes: Topic 10.
+  part defs for now. Incremental vs. atomic application: **open** for one
+  update over many instances; a **list** of updates is applied **atomically**
+  as one composite `AtomicUpdate` (**decided**, VM unchanged). How an update
+  states its affected AST nodes: Topic 10.
 - Update targets and construct-level updates (Topic 10): **agreed** that SysMLv2
   update classes are named after constructs (e.g. `RedefineAttributeValue`), not
   domain operations. How an update states what it affects: **leaning B or C**.

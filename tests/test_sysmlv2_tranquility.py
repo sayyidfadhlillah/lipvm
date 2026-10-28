@@ -376,3 +376,38 @@ def test_change_runtime_attribute_value_replaces_the_redefinition_value():
     # At this point now, the update should be applied
     assert vm._pending_update is None
     assert _placement_coordinate(vm, TOKEN_DEPO) == {"x": "25.0", "y": "30.0", "degrees": "180.0"}
+
+
+def _drain(q) -> list:
+    """Everything currently in a channel queue, in order."""
+    items = []
+    while not q.empty():
+        items.append(q.get_nowait())
+    return items
+
+
+def test_applied_update_sends_one_batch_with_the_changed_configured_values():
+    # Runtime model -> simulation (design doc, Topic 10, "Syncing a runtime
+    # change to the simulation"): pyecore notifications record which parts'
+    # configured values changed during the update, and the bridge sends them as
+    # one batch right after it is applied. Observed values are refreshed for
+    # several parts first: they must not end up in the batch.
+    vm = _build()
+    _publish_and_refresh(vm, {
+        TOKEN_DEPO: _token_depo_values(receiverSens=False),
+        CB_FEEDER: _conveyor_belt_values(),
+        VGR: _vgr_values(),
+    })
+    vm._pending_update = updates.ChangeRuntimeAttributeValue(
+        owner=TOKEN_DEPO, attribute="placementCoordinate",
+        new_value=_factory_coordinate(x=25.0, y=30.0, degrees=180.0))
+    vm.step()
+    assert vm._pending_update is None
+
+    [batch] = _drain(vm.state.channel.set_attribute_queue)
+    # Their observed values changed, but they aren't sent back to the simulation.
+    assert CB_FEEDER not in batch.parts
+    assert VGR not in batch.parts
+    assert batch.parts[TOKEN_DEPO] == {
+        "placementCoordinate": ("FactoryCoordinate", {"x": 25.0, "y": 30.0, "degrees": 180.0}),
+    }
