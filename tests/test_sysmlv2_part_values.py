@@ -52,7 +52,7 @@ def _publish_and_refresh(vm: VirtualMachine, snapshot: dict) -> None:
     syntax.refresh_part_values(
         vm.state.channel,
         vm.state.sysml.lookup_table_part_defs,
-        syntax.part_instantiations(vm.state.sysml.lookup_table_part_instantiations))
+        syntax.get_part_instantiations(vm.state.sysml.lookup_table_part_instantiations))
 
 
 def _part(vm: VirtualMachine, part_usage: str):

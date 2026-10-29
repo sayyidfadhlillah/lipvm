@@ -843,8 +843,8 @@ AtomicUpdate([
 
 - `checkpoint_type()`: `StateUsage`, like its members (inherited from
   `SysmlUpdate`).
-- `affected_parts()`: the union of its members' affected parts, without
-  duplicates.
+- `affected_elements()`: the union of its members' affected elements,
+  without duplicates.
 - `condition()`: inherited from `TranquilUpdate`, so true only when **all**
   affected parts are tranquil at the same checkpoint. The cost noted above
   remains: the more parts, the longer the wait, possibly forever.
@@ -1293,7 +1293,7 @@ Responsibilities:
 |---|---|
 | VM (`core/vm.py`) | controls: at each checkpoint calls `condition()`, notifies, checks again, applies |
 | `TranquilUpdate.condition()` (SysML language layer, written once) | runs the check: all affected parts tranquil? A pure check, no side effects |
-| update classes (e.g. `ChangeRuntimeAttributeValue`) | only declare `affected_parts()` and the change (`apply()`); never check |
+| update classes (e.g. `ChangeRuntimeAttributeValue`) | only declare `affected_elements()` and the change (`apply()`); never check |
 | `SynchronizationManager` | only the mechanics, as a listener; never judges tranquility |
 
 - **The batch goes out on "applied"**, right after `apply()`, so the
@@ -1571,10 +1571,13 @@ publish snapshot, ask again ...
   - not pending: copy the latest snapshot as today, note **"copied while
     moving"**.
 
-  `TranquilUpdate.condition()` holds only if the note is "copied while
+  ~~`TranquilUpdate.condition()` holds only if the note is "copied while
   paused" and every affected part is tranquil (option (a) above, revived in
-  this form). The tranquility check itself is unchanged; the note only says
-  whether the copy it reads was taken after the pause.
+  this form).~~ *Revised 2026-10-29 (step 3):* the note is read by
+  `PartInstantiation.is_tranquil`, not by the update: with lockstep on, a part
+  isn't tranquil on a copy taken while moving. The
+  tranquility check itself is unchanged; the note only says whether the copy
+  it reads was taken after the pause.
   - No race: the driver hands over only between steps, and the start-of-round
     code runs inside a step on the same thread, so "pending" can't change
     while it decides.
@@ -1601,9 +1604,11 @@ publish snapshot, ask again ...
     use): the note lives on the `SynchronizationManager`**, which does the
     waiting at the start of a round and so knows whether the copy was taken
     while paused (e.g. `start_round()` called from `read_events_and_execute`,
-    read as `values_copied_while_paused`; names open). With no simulation
+    read as `values_copied_while_paused`; names open). ~~With no simulation
     attached (unit tests) nothing moves, so the copy counts as taken while
-    paused and nothing is waited for. Considered: `runtime.execution_context`
+    paused and nothing is waited for.~~ *Revised 2026-10-29 (step 3):* with
+    lockstep off the note is "moving" (the truth) and the check ignores it.
+    Considered: `runtime.execution_context`
     (exists, but holds where the interpreter is, not its synchronization with
     the simulation).
 - **While an update is pending, the driver skips `tick_delay`**, otherwise
@@ -1788,8 +1793,11 @@ raise on the frame-number check, not block on a full queue's `put()`) and
   the flag in `main()`, right after `build_simulation(...)` (which calls
   `vm.init()`) and before the interpreter thread starts. The flag is then
   written before any thread reads it, and never changes afterwards.
-- `False` (tests): the manager doesn't wait, and the copy counts as "copied
-  while paused" (nothing moves, so it can't go stale).
+- ~~`False` (tests): the manager doesn't wait, and the copy counts as "copied
+  while paused" (nothing moves, so it can't go stale).~~ *Revised 2026-10-29
+  (step 3):* `False` (tests): the manager doesn't wait and the note is
+  "moving" (`False`), which is the truth; the tranquility check ignores the
+  note when lockstep is off.
 - Testing the interpreter's side of lockstep without a simulation thread: a
   test sets the flag and puts a frame number on `move_request_queue` itself.
 - Rejected: not blocking (checking whether a question is there): the
@@ -1798,6 +1806,62 @@ raise on the frame-number check, not block on a full queue's `put()`) and
   so their updates would never apply. Rejected: every test acting as the
   simulation (every update test, including `test_sysmlv2_updates.py`, would
   need to know about lockstep).
+
+**Implemented 2026-10-29 (step 3): the interpreter's side of lockstep.**
+
+- `SynchronizationManager.start_round(channel, update_pending)`
+  (`facade_proxy.py`), called first in `read_events_and_execute` (before the
+  events are drained and the values copied) in place of the plain `flush`:
+  1. `flush`, every round (tests with lockstep off still get their batch);
+  2. if a question was taken last round (`_owed_answer`), put "go" with its
+     frame number, after the flush, and remember it (`_last_answered`);
+  3. if lockstep is enabled and an update is pending: block on
+     `move_request_queue.get()` (no timeout), raise `RuntimeError` unless the
+     frame is newer than the last answered one, keep it as `_owed_answer`, note
+     `values_copied_while_paused = True`; otherwise note `False`.
+
+  The answer is held until the next round start so that the round's commands
+  and an applied update's batch are on their queues first. Called with a plain
+  bool (`runtime.has_pending_update()`), like `flush(channel)`; names kept as
+  they are.
+- **The note records only the fact** (did this round wait for the question?).
+  A first version set it to "paused" whenever lockstep was off, to keep the
+  check open; rejected as misleading (nothing pauses then, and in the live
+  demo before the driver enables lockstep the copy *can* be stale).
+- **The check lives in `PartInstantiation.is_tranquil`, not in the update
+  classes ("Option 1").** With lockstep on and the copy taken while moving, a
+  part isn't tranquil, **whether or not it has conditions** (the user's change,
+  2026-10-29): its values may be stale, and an update must only be applied in
+  a round that took the simulation's question, since only such a round
+  answers it. A first version exempted parts without conditions; that would
+  let an update be applied in a moving round while the simulation is already
+  blocked on its question, which no later round would answer, so the
+  simulation would wait for "go" forever. `TranquilUpdate.condition()`
+  stays `all(element.is_tranquil(runtime) for element in
+  self.affected_elements(runtime))` (renamed from `affected_parts`, since
+  later updates may affect running elements that aren't parts), so update
+  classes know nothing about lockstep.
+- **Considered, later ("Option 2"):** making the round start itself the
+  checkpoint for `TranquilUpdate`s would remove the note altogether, since it
+  would always see a paused copy. Not done: the round start runs inside
+  `lazy_while`'s `apply` operation (its only argument is a bool, so the VM sees
+  no AST node); it would need its own operation carrying an `UpdateAfterPoint`
+  node (`Namespace` is the obvious one, but every package and definition is a
+  `Namespace`) and a `checkpoint_type()` override. It changes the language safe
+  point; to discuss, also with Valentin.
+- **Step order, checked by tracing:** a step is a checkpoint, then one machine;
+  a round starts at the end of the step that runs the previous round's last
+  machine (round 1: in the first step). So the first checkpoint after a round
+  start is the one before its machine 1, and an update taken there is applied
+  at the round boundary, as stated above.
+- **Test:** `test_update_arriving_mid_round_waits_for_values_copied_while_paused`
+  (`tests/test_sysmlv2_tranquility.py`): lockstep on, the update arrives with
+  round 2's machines 3–7 still to run; their checkpoints refuse it, round 3
+  takes the test's question and copies while paused, and the checkpoint
+  before round 3's machine 1 applies it. It fails with the rule switched off.
+  No tests for the queue mechanics (demonstrator plumbing).
+- The user's caution, recorded in the TODO: `start_round` is complex and may
+  hide scenarios not found yet; the known ones are listed there.
 
 **Why lockstep at all, restated (2026-10-29).** Two threads run in parallel
 (pygame needs the main thread, which owns the simulation model; the

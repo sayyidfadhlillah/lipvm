@@ -1020,10 +1020,12 @@ endif
         # evaluated according to the SysML model) are checked every round
         if runtime.channel is not None:
             # Start of a round: send what live updates changed during the
-            # previous one, as one batch.
-            runtime.synchronization_manager.flush(runtime.channel)
+            # previous one, as one batch; while an update is pending, wait for
+            # the simulation's question first, so this round's events and
+            # values come from a frozen frame.
+            runtime.synchronization_manager.start_round(runtime.channel, runtime.has_pending_update())
 
-            part_instantiation_elements = part_instantiations(runtime.sysml.lookup_table_part_instantiations)
+            part_instantiation_elements = get_part_instantiations(runtime.sysml.lookup_table_part_instantiations)
 
             drain_event_queue(runtime.channel, runtime.sysml.lookup_table_item_defs, executable_stats)
 
@@ -1054,13 +1056,13 @@ endif
         # an update that adds one (not supported yet) must do both itself.
         synchronization_manager = SynchronizationManager(name="synchronization_manager")
         runtime.elements.append(synchronization_manager)
-        for part in part_instantiations(sysml_state.lookup_table_part_instantiations):
+        for part in get_part_instantiations(sysml_state.lookup_table_part_instantiations):
             ConfiguredValueObserver(part, synchronization_manager)
             part.evaluate(runtime)
 
         runtime.elements.append(rt.ExecutionContext(name="execution_context"))
 
-        executable_stats = executable_state_usages(runtime.sysml.lookup_table_executable_state_usages)
+        executable_stats = get_executable_state_usages(runtime.sysml.lookup_table_executable_state_usages)
         if not executable_stats:
             print("No ExecutableStateUsage found in this model; nothing to run.")
             return
@@ -1071,11 +1073,11 @@ endif
             args=(runtime, executable_stats)
         )
 
-def executable_state_usages(lookup_table_executable_state_usages):
+def get_executable_state_usages(lookup_table_executable_state_usages):
     return [record.element_type
             for record in lookup_table_executable_state_usages.records]
 
-def part_instantiations(lookup_table_part_instantiations):
+def get_part_instantiations(lookup_table_part_instantiations):
     return [record.element_type
             for record in lookup_table_part_instantiations.records]
 

@@ -207,14 +207,29 @@ class SynchronizationManager(RuntimeStateElement):
     configured value rather than change it in place, so a value converted when
     recorded is still the current one at `flush`.
 
+    It also runs the interpreter's side of lockstep (design doc, Topic 10,
+    "Lockstep while an update is pending") in `start_round`, and notes how
+    the round's values were copied.
+
     self._record: qualified_name -> {attr_name: (custom_class_name, values)},
         the shape of `SetAttributeCommand.parts`; the last change to an
         attribute wins
+    self.values_copied_while_paused: whether this round waited for the
+        simulation's question before its values were copied, i.e. copied while
+        the simulation was paused; always False with lockstep disabled. Read by
+        `TranquilUpdate.condition()` when lockstep is enabled
+    self._owed_answer: the frame number of the question this round took,
+        answered with "go" at the start of the next round; None if none
+    self._last_answered: the last frame number answered, to check that each
+        question is for a newer frame
     """
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._record = {}
+        self.values_copied_while_paused = False
+        self._owed_answer = None
+        self._last_answered = None
 
     def record(self, qualified_name: str, attr_name: str, value: tuple) -> None:
         """Remember that `attr_name` of part `qualified_name` now holds
@@ -231,3 +246,36 @@ class SynchronizationManager(RuntimeStateElement):
             return
         SimulationBridge.set_attributes(channel, self._record)
         self._record = {}
+
+    def start_round(self, channel: ThreadChannel, update_pending: bool) -> None:
+        """Called at the start of every round, before the events are drained
+        and the values copied.
+
+        First sends the previous round's batch, then "go" for the question
+        that round took, in that order, so the simulation drains the batch
+        before its next tick. Then, with lockstep enabled and an update
+        pending, waits for the simulation's question: it has published and is
+        blocked, so this round's values are copied while it is paused. Notes
+        whether it waited; with lockstep disabled (nobody will ask, e.g.
+        tests) it never waits.
+
+        Waits without a timeout: while an update is pending the simulation
+        asks within one frame. Raises RuntimeError if a question isn't for a
+        newer frame than the last one answered.
+        """
+        self.flush(channel)
+        if self._owed_answer is not None:
+            channel.move_permission_queue.put(self._owed_answer)
+            self._last_answered = self._owed_answer
+            self._owed_answer = None
+
+        if channel.lockstep_enabled and update_pending:
+            frame = channel.move_request_queue.get()
+            if self._last_answered is not None and frame <= self._last_answered:
+                raise RuntimeError(
+                    f"The simulation asked to move past frame {frame}, "
+                    f"but frame {self._last_answered} was already answered")
+            self._owed_answer = frame
+            self.values_copied_while_paused = True
+        else:
+            self.values_copied_while_paused = False

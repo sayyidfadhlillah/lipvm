@@ -117,23 +117,25 @@ class RerouteTransition(QuiescentUpdate):
         transition.target.qualified_name = self._new_target_substate
 
 class TranquilUpdate(SysmlUpdate):
-    """A sysmlv2 update only applied while every part it affects is tranquil
-    (PartInstantiation.is_tranquil: its part def's #Tranquility conditions
-    plus its own; a part without any is always tranquil). Replaces
-    QuiescentUpdate's "all machines settled" for updates that change parts of
-    the running system.
+    """A sysmlv2 update only applied while every element it affects is
+    tranquil, each element deciding what that means through its own
+    is_tranquil() (for a PartInstantiation: its part def's #Tranquility
+    conditions plus its own; a part without any is always tranquil).
+    Replaces QuiescentUpdate's "all machines settled" for updates that change
+    parts of the running system.
 
-    A subclass states what it affects through affected_parts(), derived from
-    the model element it changes, so the VM can ask before applying it.
+    A subclass states what it affects through affected_elements(), derived
+    from the model element it changes, so the VM can ask before applying it.
     """
 
-    def affected_parts(self, runtime: RuntimeState) -> list[rt.PartInstantiation]:
-        """The running part instances this update changes."""
-        raise NotImplementedError("A TranquilUpdate must declare its affected_parts()")
+    def affected_elements(self, runtime: RuntimeState) -> list[rt.TranquilityHolder]:
+        """The running elements this update changes."""
+        raise NotImplementedError("A TranquilUpdate must declare its affected_elements()")
 
     def condition(self, runtime: RuntimeState) -> bool:
-        return all(part.is_tranquil(runtime)
-                   for part in self.affected_parts(runtime))
+        """To ensure that the update is safe, every element affected by this update should reach tranquility."""
+        return all(element.is_tranquil(runtime)
+                   for element in self.affected_elements(runtime))
 
 
 class ChangeRuntimeAttributeValue(TranquilUpdate):
@@ -157,7 +159,7 @@ class ChangeRuntimeAttributeValue(TranquilUpdate):
         self._attribute = attribute
         self._new_value = new_value
 
-    def affected_parts(self, runtime: RuntimeState) -> list[rt.PartInstantiation]:
+    def affected_elements(self, runtime: RuntimeState) -> list[rt.PartInstantiation]:
         if runtime.sysml.lookup_table_part_defs.get_reference(self._owner) is not None:
             raise ValueError(
                 f"{self._owner!r} is a part def: changing its attribute value is a design-time "

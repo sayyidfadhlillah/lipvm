@@ -1045,15 +1045,28 @@ class PartInstantiation(ElementDefinition, TranquilityHolder, metaclass=MetaECla
         bare attribute names in a condition (e.g. `receiverSens`) resolve
         against; it is cleared afterwards.
 
+        With lockstep enabled, not tranquil while this round's values were
+        copied as the simulation moved, whether or not it has conditions:
+        the values may already be stale (Topic 10, "the mid-round gap"), and
+        an update must only be applied in a round that took the simulation's
+        question, since only such a round answers it. Without lockstep there
+        is no paused copy to wait for, so this doesn't apply.
+
         Not tranquil while it has no observed values yet (the simulation
-        hasn't published it): tranquility can't be confirmed. A part without
-        any conditions (none on its part def, none of its own) is always
+        hasn't published it): its conditions can't be confirmed. A part
+        without any conditions (none on its part def, none of its own) is
         tranquil: leaving out #Tranquility is the modeller's choice, so only
         the language safe point applies (see
         Language-Safe-and-Execution-Tranquility-points.md, step 4). Conditions
         on the part def's supertypes are not followed yet
         (ARCHITECTURAL-CONFUSION.md, Topic 5).
         """
+        # With lockstep, only judge on values copied while the simulation was
+        # paused, conditions or not.
+        if (runtime.channel.lockstep_enabled
+                and not runtime.synchronization_manager.values_copied_while_paused):
+            return False
+
         record = runtime.sysml.lookup_table_part_defs.get_reference(self.part_def_origin.qualified_name)
         if record is None:
             raise LookupError(

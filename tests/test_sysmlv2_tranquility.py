@@ -11,7 +11,7 @@ failing to collect.
 import types
 
 from core.language import Scenario
-from core.vm import VirtualMachine
+from core.vm import ProgramUpdateOption, VirtualMachine
 
 from languages.sysmlv2 import runtime as rt
 from languages.sysmlv2 import syntax
@@ -214,7 +214,7 @@ def _publish_and_refresh(vm: VirtualMachine, snapshot: dict) -> None:
     syntax.refresh_part_values(
         vm.state.channel,
         vm.state.sysml.lookup_table_part_defs,
-        syntax.part_instantiations(vm.state.sysml.lookup_table_part_instantiations))
+        syntax.get_part_instantiations(vm.state.sysml.lookup_table_part_instantiations))
 
 
 def _is_tranquil(vm: VirtualMachine, part_usage: str) -> bool:
@@ -389,7 +389,7 @@ def _drain(q) -> list:
 def _step_round(vm: VirtualMachine) -> None:
     """Step every state machine once, so the round ends and the next one
     starts (where the SynchronizationManager flushes its batch)."""
-    for _ in syntax.executable_state_usages(vm.state.sysml.lookup_table_executable_state_usages):
+    for _ in syntax.get_executable_state_usages(vm.state.sysml.lookup_table_executable_state_usages):
         vm.step()
 
 
@@ -418,3 +418,49 @@ def test_applied_update_sends_one_batch_with_the_changed_configured_values():
     assert batch.parts[TOKEN_DEPO] == {
         "placementCoordinate": ("FactoryCoordinate", {"x": 25.0, "y": 30.0, "degrees": 180.0}),
     }
+
+
+def test_update_arriving_mid_round_waits_for_values_copied_while_paused():
+    # Lockstep (design doc, Topic 10, "the mid-round gap"): the round that
+    # starts while an update is pending waits for the simulation's question,
+    # so its values are copied while the simulation is paused. An update that
+    # arrives mid-round finds the round's values copied while the simulation
+    # was still moving: tranquil or not, they may be stale, so it waits for
+    # the next round.
+    #
+    # One vm.step() is one state machine: a checkpoint, then the machine. A
+    # round starts at the end of the step that runs the previous round's last
+    # machine (round 1: in the first step), so the first checkpoint after a
+    # round start is the one before its machine 1.
+    vm = _build()  # round 1 has started, no machine has run yet
+    vm.state.channel.lockstep_enabled = True
+    _publish_and_refresh(vm, {
+        TOKEN_DEPO: _token_depo_values(receiverSens=False),
+        CB_FEEDER: _conveyor_belt_values(),
+        VGR: _vgr_values(),
+    })
+    machines = len(syntax.get_executable_state_usages(vm.state.sysml.lookup_table_executable_state_usages))
+
+    _step_round(vm)  # round 1, machines 1 to 7; then round 2 starts (no update
+                     # pending: copied while moving)
+    vm.step()        # round 2, machine 1
+    vm.step()        # round 2, machine 2
+
+    # Mid-round 2, machines 3 to 7 still to run; tokenDepo is tranquil.
+    update = updates.ChangeRuntimeAttributeValue(
+        owner=TOKEN_DEPO, attribute="placementCoordinate",
+        new_value=_factory_coordinate(x=25.0, y=30.0, degrees=180.0))
+    vm.submit(update, ProgramUpdateOption.HOTSWAP)
+    # Standing in for the simulation: it sees the update pending, asks
+    # whether it may move past frame 1, and waits.
+    vm.state.channel.move_request_queue.put(1)
+
+    for _ in range(machines - 3):  # checkpoints before machines 3 to 6: copied while moving
+        vm.step()
+    assert vm._pending_update is update
+
+    vm.step()  # checkpoint before machine 7 still sees round 2's copy; machine 7
+    assert vm._pending_update is update  # runs, then round 3 starts: takes question 1, copies while paused
+
+    vm.step()  # checkpoint before round 3's machine 1: tokenDepo is tranquil, so it is applied
+    assert vm._pending_update is None
