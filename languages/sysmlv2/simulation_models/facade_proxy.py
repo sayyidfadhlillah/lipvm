@@ -105,7 +105,10 @@ class ThreadChannel(RuntimeStateElement):
     """Bundles everything the interpreter thread and the owning thread use
     to communicate: a published snapshot for reads, plus one-way queues
     for `instantiate`/`call_action` -- all 3 `SimulationBridge` operations,
-    none of them blocking.
+    none of them blocking. The one exception is lockstep while an update is
+    pending (design doc, Topic 10): the simulation asks on
+    `move_request_queue` and waits for the answer on `move_permission_queue`,
+    the only place where one thread waits for the other.
 
     A `RuntimeStateElement` so it can be registered directly on `runtime`
     and reached as `runtime.channel` -- `SimulationBridge` itself holds no
@@ -117,6 +120,10 @@ class ThreadChannel(RuntimeStateElement):
     self.instantiate_queue: a queue of parts to be instantiated in the Simulation model and its visualization
     self.model_update_queue: a queue of model changes from live updates (one item per update, e.g. a SetAttributeCommand batch) to be applied to running parts
     self.event_queue: a queue of events produced by the Simulation model, to be delivered to the interpreter
+    self.move_request_queue: the simulation's "may I move past frame N?", a frame number, while an update is pending
+    self.move_permission_queue: the interpreter's "go", the same frame number; both sides raise on a mismatch
+    self.lockstep_enabled: whether a simulation takes part in the request and response; False (e.g. in tests)
+        means nobody will ask, so the interpreter must not wait. Set by the driver before the interpreter thread starts
     """
 
     def __init__(self, **kwargs):
@@ -126,6 +133,11 @@ class ThreadChannel(RuntimeStateElement):
         self.instantiate_queue = queue.Queue()
         self.model_update_queue = queue.Queue()
         self.event_queue = queue.Queue()
+
+        # Live experience-related functionality
+        self.move_request_queue = queue.Queue()
+        self.move_permission_queue = queue.Queue()
+        self.lockstep_enabled = False
 
 class SimulationBridge:
     """Static utility surface for whatever simulation domain is plugged in

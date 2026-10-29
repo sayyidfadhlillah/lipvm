@@ -1773,13 +1773,21 @@ the note only reuses the answer. The manager can't infer it: a `ThreadChannel`
 always exists (`Namespace.evaluate`, `syntax.py:1046`), and tests publish
 snapshots by hand.
 
+*Implemented 2026-10-29 (step 2):* `ThreadChannel` has `move_request_queue`,
+`move_permission_queue` (both unbounded `queue.Queue`s: a protocol bug should
+raise on the frame-number check, not block on a full queue's `put()`) and
+`lockstep_enabled = False`. Nothing reads them yet.
+
 - `ThreadChannel.lockstep_enabled`, `False` by default (a plain attribute set
   in `__init__`, like the queues). It says whether the other side takes part
   in the request and response, not whether a simulation exists.
-- The live driver sets it to `True` in `run_interpreter_loop`, right after the
-  first `vm.step()` (the channel is only created during that step). Safe: no
-  update can be pending before the loop, where updates are handed over; the
-  flag is written once and read only on the interpreter thread.
+- ~~The live driver sets it to `True` in `run_interpreter_loop`, right after
+  the first `vm.step()` (the channel is only created during that step).~~
+  *Revised 2026-10-29:* the channel is created during `vm.init()`
+  (`Namespace.evaluate` runs there, not on the first step), so the driver sets
+  the flag in `main()`, right after `build_simulation(...)` (which calls
+  `vm.init()`) and before the interpreter thread starts. The flag is then
+  written before any thread reads it, and never changes afterwards.
 - `False` (tests): the manager doesn't wait, and the copy counts as "copied
   while paused" (nothing moves, so it can't go stale).
 - Testing the interpreter's side of lockstep without a simulation thread: a
