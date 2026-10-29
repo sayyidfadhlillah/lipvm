@@ -1176,7 +1176,10 @@ VM know nothing about the simulation, and **when** to send is only where
 - ~~**now:** right after the migration, in `TranquilUpdate.apply()`~~
 - **Superseded later the same day:** with the pause handshake, the batch is
   sent on the VM's "applied" notification instead (see "How the handshake
-  runs" below). The round-level decision, kept for the record:
+  runs" below). **Superseded again 2026-10-29 by lockstep:** the batch is
+  flushed at the start of the round after the update was applied, right
+  before "go" (`SynchronizationManager.start_round`, see "Lockstep while an
+  update is pending"). The round-level decision, kept for the record:
 - ~~**Decided (revised 2026-10-28): once per interpreter round, next to
   `refresh_part_values`**~~ in `Namespace.read_events_and_execute`. The VM
   applies a pending update at a checkpoint during an interpreter step; the
@@ -1216,8 +1219,9 @@ object holding the record and `flush` (called "the bridge object" above) is a
 `RuntimeStateElement` named `SynchronizationManager`, registered in the runtime
 state next to the channel and reached as `runtime.synchronization_manager`.
 
-**Holding tranquility while the update is applied: pause first, then confirm
-(decided 2026-10-28).** Between the VM's decision and the simulation applying
+**~~Holding tranquility while the update is applied: pause first, then
+confirm (decided 2026-10-28).~~ Superseded 2026-10-29 by lockstep while an
+update is pending (see below); kept for the record.** Between the VM's decision and the simulation applying
 the batch, the simulation keeps running, and the decision itself rests on
 values copied at the start of the round. So the simulation is paused for the
 application, with a handshake:
@@ -1238,8 +1242,15 @@ for now: a simple pause (pause when the VM decides, no confirmation), which
 closes the gap after the decision but not the staleness of the copied values
 before it.
 
-**How the handshake runs: the VM notifies, the `SynchronizationManager`
-reacts (decided 2026-10-28).** `core/` has no concept of pausing or
+**Superseded 2026-10-29:** the handshake is replaced by lockstep while an
+update is pending (see "Lockstep while an update is pending" below). The
+staleness the second check covered can't occur when the simulation doesn't
+move between the copy and "go"; no listener mechanism or notifications in
+`core/vm.py` are needed.
+
+**~~How the handshake runs: the VM notifies, the `SynchronizationManager`
+reacts (decided 2026-10-28).~~ Superseded 2026-10-29 with the handshake; kept
+for the record.** `core/` has no concept of pausing or
 simulations. Instead, the VM sends language-independent **notifications about
 the update** to registered listeners, and checks the condition twice around
 them, a two-phase commit (prepare, then commit or abort):
@@ -1310,15 +1321,20 @@ emit command and the token appearing (`token_producer.py`). For an unusually
 slow round the confirmation fails, the pause is released, and the update waits
 for the next tranquil window.
 
+**Note 2026-10-29:** with lockstep the delay is no longer needed (a tranquil
+window of one simulation step is enough). **Decided: keep it**, as a domain
+assumption rather than a workaround: a real factory takes about that long to
+produce a token.
+
 **Showing that an update is waiting (decided 2026-10-28).** Reaching
 tranquility is the VM's job, so the demonstrator's message ("There is an update
 to the model. Waiting to reach tranquility") shows the **VM's status**, not the
 contents of a queue (the simulation drains its queues every frame, so a queue
 is empty again right after each drain, even while an update still waits). The
-core VM exposes a small read-only property:
+core VM exposes a small read-only check (**implemented 2026-10-29 as a
+method**, `vm.has_pending_update()`, not a property):
 
 ```python
-@property
 def has_pending_update(self) -> bool:      # core/vm.py
     return self._pending_update is not None
 ```
@@ -1342,6 +1358,415 @@ IDE turning edits of the `.sysml` model into updates; the demonstrator applies a
 list of update scripts built from the update classes. Any change to configured
 values outside an update is ignored. This is what makes the sync after an
 update complete: nothing else changes configured values.
+
+## Lockstep while an update is pending (decided 2026-10-29, replaces the handshake)
+
+**The idea.** Instead of the interpreter pausing the simulation (the handshake
+above), the simulation asks before it moves: after publishing its snapshot, it
+asks the interpreter "may I move my values now?" and doesn't tick until the
+answer comes. Between the snapshot and the answer the copied values are the
+real values, so a tranquility decision made in that round holds by
+construction until the update is applied and the answer "go" is given. This
+removes the staleness of the copied values, the reason for the handshake's
+second check.
+
+**Why a simple pause was rejected, recalled.** Two different "pauses":
+
+- pausing as soon as an update is submitted can't work: a frozen simulation
+  never becomes tranquil, so the update waits forever;
+- pausing when the VM decides works, but the decision rests on copied values
+  up to one round old (plus the pause's own latency), so a part may already
+  have left tranquility. The handshake's second check covered that.
+
+**What lockstep would change, compared to the handshake** (to be confirmed as
+the brainstorm continues):
+
+- no second check, so no ready/withdrawn/applied notifications and no listener
+  mechanism in `core/vm.py`; possibly only `has_pending_update` remains;
+- the producer's 0.6 s emit delay is no longer needed: a tranquil window of one
+  simulation step is enough;
+- the batch goes out right after `apply()` and before the answer "go", so the
+  simulation drains it before its next tick, in the frame the decision was
+  made on.
+
+**Decided (question 1): lockstep only while an update is pending.** Otherwise
+the simulation runs at full speed, and the answer is an immediate "yes".
+
+**Measured (2026-10-29, headless runs of `complete-interesting-simulation`,
+60 s each):**
+
+| | `tick_delay` 0.02 (today) | `tick_delay` 0 |
+|---|---|---|
+| Round, wall-clock time | median 146 ms (p95 151 ms) | median 0.31 ms |
+| Round, time inside `vm.step()` | median 2.8 ms, p95 5.0 ms, max 34 ms | median 0.30 ms, p95 0.95 ms |
+| `vm.step()` calls per round | 7, every round | 7, every round |
+| Simulation frame rate | 56.8 fps | 37 fps |
+| Slowest single round / frame | 178 ms / 77 ms | 1442 ms / 1656 ms |
+
+- The 146 ms round measured on 2026-10-28 is about 98 % sleep: 7 steps ×
+  0.02 s `tick_delay` (`main_lipvm_dtsimulation.py`). The real work is about
+  3 ms, so in lockstep one round plus the simulation's own frame work (under
+  1 ms) fits in one 16.7 ms frame, even at p95; only the rare 34 ms round
+  would drop a frame or two. **Lockstep while an update is pending should not
+  be visible.**
+- `tick_delay` 0 is not a model of lockstep: the interpreter then loops
+  constantly and takes the GIL from the simulation thread (37 fps). In
+  lockstep both sides must **block** while waiting (a blocked thread releases
+  the GIL), never poll in a loop. The 0.02 column gives the realistic work
+  per round.
+- A stall of about 1.4 s (here freezing both threads at once; 1.34 s on
+  2026-10-28) occurs regardless of lockstep, but in lockstep the simulation
+  would visibly freeze for it. Cause unknown (garbage collection is an
+  unchecked guess).
+- Not measured: the hand-over time between the threads (publish → interpreter
+  wakes → answer → simulation wakes); measurable once the mechanism exists.
+
+**Decided (question 2): the whole simulation asks**, once per frame, in
+`on_tick` before `model.tick()`; while an update is pending, every part waits.
+Reasons: a part's values can be changed by other parts (e.g. `vgrPlaceDepo`
+dropping a token flips `tokenDepo`'s `receiverSens`), so gating only the
+affected parts wouldn't keep their copied values valid; updates may affect the
+whole simulation anyway; one gate keeps `Factory` and `BaseSimulationModel`
+unchanged; and a round fits in a frame, so per-part gating would gain nothing
+visible.
+
+**What a round looks like (checked 2026-10-29).** `read_events_and_execute`
+drains the events and copies the snapshot's values (`refresh_part_values`),
+then evaluates each `ExecutableStateUsage` once; each evaluation is one
+`vm.step()` (7 in this model), preceded by a checkpoint (`StateUsage` is an
+`UpdateBeforePoint`). The copied values change only at the refresh, so within
+a round `condition()` gives the same answer at every checkpoint: if it holds
+anywhere in the round, it already held at the first checkpoint, right after
+the copy and before any state machine reacted.
+
+**Decided (question 3): the interpreter answers at the start of a round**, in
+`read_events_and_execute`. While an update is pending:
+
+```
+Simulation thread                     Interpreter thread
+-----------------                     ------------------
+publish snapshot, ask "may I move?"
+wait ................................ receive the question
+                                      drain events, copy the snapshot's values
+                                      first checkpoint: condition() on these values
+                                        true  -> apply the update, send the batch
+                                        false -> nothing, the update keeps waiting
+                                      run the state machines (may send commands)
+receive "go" <....................... answer "go"
+drain batch + commands
+model.tick()
+publish snapshot, ask again ...
+```
+
+- **The simulation asks the VM** whether an update is pending
+  (`vm.has_pending_update`, read in `on_tick`), and asks "may I move?" only
+  then; otherwise it runs at full speed.
+- **The VM informs the interpreter** that an update is pending (option b), so
+  the interpreter waits for the question by **blocking** (not polling: a
+  looping interpreter takes the GIL, see the measurement above). "The
+  interpreter" here is the SysML code the VM runs (`read_events_and_execute`),
+  which only receives `runtime`, not the VM. **Decided:** the VM's
+  `has_pending_update` is made reachable through `runtime` (a small read-only
+  addition to `core/`).
+- **How `runtime` reaches it (decided 2026-10-29): a read-only property on
+  `RuntimeState` that asks the VM.** The VM creates the runtime state in
+  `init()` and hands it a check at that point:
+
+  ```python
+  # core/vm.py, init()
+  self._runtime = RuntimeState()
+  self._runtime.pending_update_check = lambda: self._pending_update is not None
+
+  # core/language.py, RuntimeState
+  @property
+  def has_pending_update(self) -> bool:
+      return self.pending_update_check()
+  ```
+
+  The SysML code reads `runtime.has_pending_update`.
+  - One source of truth, the VM's `_pending_update`: tests assigning
+    `vm._pending_update` directly stay consistent.
+  - The language sees only yes/no, not the VM (it can't call `vm.step()`).
+  - `pending_update_check` is declared on the pyecore class (a transient
+    `EAttribute` with a Python data type, like `observed_values`), not set as
+    an undeclared attribute. Name open.
+  - Rejected: a core element in `runtime.elements` (minilogo and robot replace
+    that list wholesale, `languages/minilogo/syntax.py:153`,
+    `languages/robot/syntax.py:246`, silently dropping it); a flag the VM
+    writes on every change (two sources of truth, out of sync when tests
+    assign `_pending_update` directly).
+  - Shown to Valentin together with `has_pending_update` and the submit
+    method, as one small set of VM changes.
+  - **Implemented 2026-10-29**, as a **method** like the VM's
+    (`runtime.has_pending_update()`): `RuntimeState.pending_update_check` is a
+    transient `EAttribute` (`PendingUpdateCheck` data type, `eType=object`),
+    and `vm.init()` hands over the bound method `self.has_pending_update`
+    rather than a lambda (same live reading, one definition). Raises
+    `RuntimeError` when the check is unset. Tests:
+    `tests/test_vm_pending_update.py`.
+  - Kept only while pending (decided again 2026-10-29), instead of
+    always-lockstep: always-lockstep would remove this change, the note, the
+    mid-round gap and `tick_delay`, and is smooth with today's model, but it
+    ties the simulation's frame rate to the model's size permanently (a
+    round over ~16 ms, e.g. a model several times bigger, would slow the
+    simulation all the time, not only while an update waits).
+- **Submitting an update from the live driver (decided 2026-10-29).** Update
+  scripts enter through `main_lipvm_dtsimulation.py`: they are put on a plain
+  queue there, and `run_interpreter_loop` (the interpreter thread) hands them
+  to the VM between two `vm.step()` calls, through a **small public method in
+  `core/vm.py`** (name open, e.g. `vm.submit(update)`):
+  - attaches the update's edit script to the scenario, if it has one (as
+    `vm.update()` does);
+  - **raises** if an update is already pending, instead of silently replacing
+    it;
+  - sets the pending update, and does **not** call `stop()`/`run()`:
+    `vm.update()` can't be used here, because `run()` on the interpreter thread
+    would take over the loop and never return to `run_interpreter_loop`.
+
+  Assigning `vm._pending_update` directly (as the tests do) would work
+  functionally, but the live driver would depend on the VM's private state,
+  skip the edit script and silently overwrite a pending update.
+
+  `submit` is `update(…, HOTSWAP)` without `stop()`/`run()`: `update()`
+  assumes the caller owns the loop (`run()` steps until the program ends, and
+  a SysML program never ends), while the live driver drives the VM itself
+  with `vm.step()` (pacing with `tick_delay`, `stop_event`, taking updates
+  from the queue). Switching the driver to `vm.run()` was considered and
+  rejected: pacing would move into the VM or the language, and updates would
+  have to be submitted from another thread (a lock for "already pending", and
+  `attach_to` editing the AST off the interpreter thread, breaking thread
+  confinement), so a "register only" method would still be needed.
+
+  **Decided (2026-10-29, for the first prototype): a separate
+  `vm.submit(update)`** (option B); `update()` stays untouched (two duplicated
+  lines: the attach). Alternative to discuss with Valentin after the
+  prototype: option A, reuse `update()` with a flag (e.g.
+  `update(update, HOTSWAP, run=False)`, default `True` keeps today's callers,
+  `tests/test_robot.py:205` and `core/lesp.py:23`), plus deciding whether
+  `update()` should also raise instead of silently replacing a pending
+  update. `submit` attaches an edit script like `update()` does, so it
+  accepts every kind of update, although our SysML updates have none.
+
+  **Implemented 2026-10-29:** `submit(update_script, option)`; it takes the
+  option and accepts only `HOTSWAP` (`ValueError` for `RESTART`, which belongs
+  to `update()`), raises `RuntimeError` if an update is already pending, both
+  before changing anything; then attaches the edit script, if any, and sets
+  the update pending. Tests: `tests/test_vm_pending_update.py`.
+- **The mid-round gap.** The driver can't tell which step begins a round (a
+  step is one state machine; only the SysML code knows the round), so an
+  update may become pending mid-round. The remaining checkpoints of that round
+  would see values copied while the simulation was still moving: they may say
+  "tranquil" while the real part no longer is. **Decided (2026-10-29): the
+  round remembers how its values were copied.** At the start of each round
+  the SysML code checks `has_pending_update`:
+  - pending: wait for the question, copy the frozen values, note **"copied
+    while paused"**;
+  - not pending: copy the latest snapshot as today, note **"copied while
+    moving"**.
+
+  `TranquilUpdate.condition()` holds only if the note is "copied while
+  paused" and every affected part is tranquil (option (a) above, revived in
+  this form). The tranquility check itself is unchanged; the note only says
+  whether the copy it reads was taken after the pause.
+  - No race: the driver hands over only between steps, and the start-of-round
+    code runs inside a step on the same thread, so "pending" can't change
+    while it decides.
+  - An update arriving mid-round finds "copied while moving" at the remaining
+    checkpoints and isn't applied; the next round waits for the question and
+    notes "copied while paused".
+  - `condition()` stays a pure check: it only reads the note.
+  - Cost: an update may wait at most one extra round.
+  - Rejected: pausing alone, with the same check and no note. The pause
+    freezes the simulation, but the remaining checkpoints read the copy taken
+    at the start of the round, before the pause (up to 146 ms old without
+    lockstep).
+  - Rejected: copying again when the update arrives, mid-round. Machines
+    before and after the hand-over would react to two different snapshots in
+    one round, breaking the simulated concurrency.
+  - Rejected: letting the driver hand over only at the start of a round. A
+    `vm.step()` is one state machine, so the driver can't tell which step
+    starts a round; and the copy for the next round already happens at the end
+    of the previous step (`read_events_and_execute` runs right after the last
+    state machine), so the first checkpoint would still see values copied
+    without waiting. Making it work needs the round start as its own step plus
+    a signal from the SysML code to the driver.
+  - **Decided (2026-10-29, provisional; to be revisited if it feels odd in
+    use): the note lives on the `SynchronizationManager`**, which does the
+    waiting at the start of a round and so knows whether the copy was taken
+    while paused (e.g. `start_round()` called from `read_events_and_execute`,
+    read as `values_copied_while_paused`; names open). With no simulation
+    attached (unit tests) nothing moves, so the copy counts as taken while
+    paused and nothing is waited for. Considered: `runtime.execution_context`
+    (exists, but holds where the interpreter is, not its synchronization with
+    the simulation).
+- **While an update is pending, the driver skips `tick_delay`**, otherwise
+  each answer comes up to 146 ms late (about 7 fps).
+- **Why the start of a round:** a round is how the interpreter simulates the
+  state machines running concurrently (each takes one step on the same copied
+  values). Its start is the only moment the whole concurrent system is in a
+  consistent global state: every machine has taken the same number of steps
+  and none has reacted to the new snapshot yet. With updates taken there, the
+  round boundary is effectively the SysML language safe point; compare
+  Topic 2's note that every `StateUsage` being a checkpoint is "too broad".
+  The checkpoint marking is unchanged for now.
+- **Not covered by lockstep:** events waiting in a state machine's mailbox
+  (`pending`) while its part looks tranquil. The mailbox is a language
+  concept, but whether a waiting event matters is case-specific, so it sits
+  between the two layers (Topics 2, 3, 4). Left out of the first prototype:
+  for `ChangeRuntimeAttributeValue`, a waiting event processed with the new
+  configured value is the intended behaviour.
+
+**The waiting in `on_tick` (decided 2026-10-29): block inside `on_tick`, no
+change to the visualization.** The visualization's frame loop
+(`factory_visualization.py:770-844`) is: window events → `model.tick()` →
+`on_tick()` → draw → flip → `clock.tick(60)`. `on_tick`
+(`main_lipvm_dtsimulation.py:108`) is the simulation thread's side of the
+communication: it receives and applies instantiate and action commands
+(`:130`, `:134`), sends events (`:138`) and publishes the snapshot (`:141`).
+While an update is pending, it asks at its end and blocks until "go":
+
+- each wait is one interpreter round (~3 ms, p95 5 ms), so the window stays
+  responsive: the frame is drawn and window events are handled in the next
+  frame. "Keep drawing while waiting" was a concern of the handshake, where a
+  pause could be long;
+- right after "go", `on_tick` drains `model_update_queue` (the batch) and
+  `action_queue` (the round's commands) again, so they're applied before the
+  next `model.tick()`, in the frame the decision was made on (`on_tick` runs
+  after `model.tick()`; draining in the next frame would let the factory
+  take one more tick with the old values);
+- rejected: a non-blocking "may I tick?" check before `model.tick()` in the
+  visualization loop (changes the visualization and its interface, only worth
+  it if one wait could be long).
+
+**The request and response (decided 2026-10-29).** Today every message
+between the threads is one-way and non-blocking (`ThreadChannel`: "none of
+them blocking"); "may I move?" / "go" is the first request and response, the
+first place where one thread depends on the other answering.
+
+- `ThreadChannel` gets `move_request_queue` (simulation → interpreter) and
+  `move_permission_queue` (interpreter → simulation). The question carries
+  only a frame number: the values are already published, and with the
+  simulation blocked, `latest_snapshot` is the frozen state. The answer
+  carries the same frame number; both sides **raise** on a mismatch.
+- `queue.Queue.get(timeout=...)` blocks without polling and releases the
+  GIL.
+
+Simulation side (`on_tick`, after the publish):
+
+```python
+if vm.has_pending_update:
+    frame += 1
+    channel.move_request_queue.put(frame)                     # ask
+    while True:                                               # block, in slices
+        try:
+            answered = channel.move_permission_queue.get(timeout=0.1)
+            break
+        except queue.Empty:
+            if stop_event.is_set() or not interpreter_thread.is_alive():
+                raise RuntimeError("interpreter stopped while the simulation waited for permission to move")
+    if answered != frame:
+        raise RuntimeError(f"permission for frame {answered}, asked for {frame}")
+    drain model_update_queue and action_queue                 # batch + the round's commands, before the next tick
+```
+
+Interpreter side (`SynchronizationManager.start_round`, first thing in
+`read_events_and_execute`):
+
+```python
+if self.owed_answer is not None:                   # the previous round answered a question
+    self.flush(channel)                            # batch first (if the update was applied)...
+    channel.move_permission_queue.put(self.owed_answer)    # ...then "go"
+    self.owed_answer = None
+
+if runtime.has_pending_update:                     # (and a simulation is attached)
+    self.owed_answer = channel.move_request_queue.get()    # wait for the question
+    copy values from latest_snapshot; note "copied while paused"
+else:
+    copy values from latest_snapshot; note "copied while moving"
+```
+
+- **"go" is sent at the start of the next round**, not right after the copy:
+  the state machines' commands and an applied update's batch must be on their
+  queues before it, so the simulation drains them before its next tick.
+- **Exactly one answer per question:** the simulation asks at most once per
+  frame and then blocks; pending becomes false only through `apply()`, on the
+  interpreter thread, in a round that waited for a question, whose answer is
+  sent at the next round start regardless; while the interpreter waits, the
+  update stays pending, so the simulation asks within one frame.
+- **The answer is always "go".** The question is "may I take my next step?",
+  not "may I apply?". The interpreter holds the simulation only for one round.
+  While the update waits for tranquility, the simulation keeps moving one tick
+  per round (still 60 fps), the state machines keep running and sending
+  commands, so the factory progresses towards a tranquil state as it would
+  without the update, and each frame is a fresh check on a frozen copy:
+
+  ```
+  frame N    simulation: pending → asks (N), blocks
+  round R    interpreter: gets N, copies, note "paused"
+             first checkpoint: condition() false (e.g. cbFeeder still moving) → not applied
+             machines run, may send commands (e.g. STOP when the token reaches the sensor)
+  round R+1  interpreter: nothing to flush, answers N; still pending → waits for the next question
+  frame N    simulation: gets N, drains the commands, returns
+  frame N+1  simulation: model.tick(), publishes, asks (N+1), blocks
+  round R+1  interpreter: gets N+1, copies, checks again ...
+  ```
+
+  And once the update is applied in round R:
+
+  ```
+  round R+1  interpreter: flush batch, answer N; pending now false → copies normally
+  frame N    simulation: gets N, drains batch + commands, returns
+  frame N+1  simulation: pending false → no question, full speed
+  ```
+- **Tranquility never reached** (e.g. the VGRs): lockstep continues
+  indefinitely at no visible cost, the update stays pending and the "waiting"
+  message stays up. The fallback (keep waiting, time out, withdraw) is still
+  Topic 4's open question.
+- **Shutdown:** if the window closes while the interpreter waits for a
+  question, it stays blocked; it's a daemon thread, so the process still exits
+  after `join(timeout=2)`. Alternatively the driver puts a sentinel on
+  `move_request_queue` at shutdown (implementation detail).
+
+**Whether anyone will ask: the `lockstep_enabled` flag (decided 2026-10-29).**
+The interpreter blocks at the start of a round until the simulation's question
+arrives; if nobody will ask (unit tests: they set a pending update and call
+`vm.step()` with no simulation thread), it would block forever. This comes
+from the blocking wait, not from the note (the handshake had the same need);
+the note only reuses the answer. The manager can't infer it: a `ThreadChannel`
+always exists (`Namespace.evaluate`, `syntax.py:1046`), and tests publish
+snapshots by hand.
+
+- `ThreadChannel.lockstep_enabled`, `False` by default (a plain attribute set
+  in `__init__`, like the queues). It says whether the other side takes part
+  in the request and response, not whether a simulation exists.
+- The live driver sets it to `True` in `run_interpreter_loop`, right after the
+  first `vm.step()` (the channel is only created during that step). Safe: no
+  update can be pending before the loop, where updates are handed over; the
+  flag is written once and read only on the interpreter thread.
+- `False` (tests): the manager doesn't wait, and the copy counts as "copied
+  while paused" (nothing moves, so it can't go stale).
+- Testing the interpreter's side of lockstep without a simulation thread: a
+  test sets the flag and puts a frame number on `move_request_queue` itself.
+- Rejected: not blocking (checking whether a question is there): the
+  interpreter would either loop without sleeping (takes the GIL, ~37 fps) or
+  sleep and answer late (~7 fps), and tests' copies would count as "moving",
+  so their updates would never apply. Rejected: every test acting as the
+  simulation (every update test, including `test_sysmlv2_updates.py`, would
+  need to know about lockstep).
+
+**Why lockstep at all, restated (2026-10-29).** Two threads run in parallel
+(pygame needs the main thread, which owns the simulation model; the
+interpreter runs on its own), so taking turns needs a signal both ways: "go"
+from the interpreter, "my step is done, may I move again?" from the
+simulation. Without it, a stale copy can be wrong in two ways: "not tranquil"
+while the part already is (harmless, the update waits one more round), or
+"tranquil" while the part no longer is (the update is applied to a part
+starting a task, and can't be undone). The second is exactly the moment the
+modeller's condition protects, e.g. `tokenDepo` moved while `vgrPlaceDepo` is
+putting a token on it. Rare without lockstep (the copy is at most one round,
+146 ms, old), but it makes the difference between "safe" and "usually safe";
+lockstep also holds tranquility until the change has landed (Vandewoude's
+"held", Topic 4).
 
 ---
 
@@ -1756,7 +2181,12 @@ or inspects the runtime model as XMI. To keep the later switch cheap:
   update classes are named after constructs (e.g. `RedefineAttributeValue`), not
   domain operations. How an update states what it affects: **leaning B or C**.
   Open: usage vs. definition classes, missing redefinitions, and a new
-  `set_attribute` bridge command for the simulation.
+  `set_attribute` bridge command for the simulation. Holding tranquility while
+  applying: the pause-then-confirm handshake (decided 2026-10-28) is
+  **superseded** by lockstep while an update is pending, the simulation asking
+  "may I move?" and the interpreter answering "go" at the start of the next
+  round (**decided** 2026-10-29, design complete, measured as not visible;
+  **not implemented**).
 - Three levels of responsibility (Topic 11): **agreed**: the VM provides an
   interface to language engineers, who provide a construct to modellers. Exact
   core interface, discussion with Valentin, and sequencing with steps 2–3:
