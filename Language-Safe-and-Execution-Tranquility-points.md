@@ -1135,7 +1135,14 @@ redefinition, only on the nested object itself.
   value (`_custom_attribute_value`, as at instantiation), groups them by part
   into one batch (`{qualified_name: {attribute: (class_name, values)}}`), and
   empties the record. Only changed attributes are sent, never a part's
-  unchanged ones. **With nothing recorded, `flush` sends nothing** (no empty
+  unchanged ones.
+  *Revised 2026-10-29 (implementation):* the observer converts when it
+  records, and the record is already grouped by part, in the batch's shape
+  `{qualified_name: {attribute: (class_name, values)}}`; `flush` only sends
+  it. The manager is generic (`facade_proxy.py`) and can't import the SysML
+  conversion, so the conversion stays on the SysML side
+  (`observers.py`). Same behaviour: last value wins, one batch, nothing when
+  empty. Converting early relies on the replacement rule above. **With nothing recorded, `flush` sends nothing** (no empty
   batch), e.g. after an update that only changes interpreter-side things: a
   batch on the queue always means changes to apply.
 - **Only `PartInstantiation`s get observers, not every `TranquilityHolder`.**
@@ -1726,6 +1733,36 @@ else:
   question, it stays blocked; it's a daemon thread, so the process still exits
   after `join(timeout=2)`. Alternatively the driver puts a sentinel on
   `move_request_queue` at shutdown (implementation detail).
+
+**Implemented 2026-10-29: the record and `flush` (lockstep not yet).**
+`SynchronizationManager` lives in `facade_proxy.py`, next to `ThreadChannel`
+but as its own class (the channel holds what both threads share, the manager
+what only the interpreter thread uses, plus logic). It is generic: it records
+values already converted to `(class_name, values)` and sends one
+`set_attributes` batch per `flush`. The SysML-specific part is
+`ConfiguredValueObserver`, one per part, which converts with
+`_custom_attribute_value` when recording, the same split as instantiation
+(`PartInstantiation.evaluate` converts, `SimulationBridge.instantiate`
+enqueues); this also avoids a circular import (`runtime.py` imports
+`facade_proxy.py`). The observer has its own module,
+`languages/sysmlv2/observers.py` (moved out of `runtime.py` the same day):
+`runtime.py` defines the runtime model, `observers.py` watches it, and only
+`syntax.py` creates observers, so imports run one way
+(`syntax.py` → `observers.py` → `runtime.py` → `facade_proxy.py`).
+`flush` runs at the start of each round in
+`read_events_and_execute`; with lockstep it moves into `start_round()`.
+
+**Also moved 2026-10-29: instantiation happens once.** The loop calling
+`PartInstantiation.evaluate` (which enqueues an `InstantiateCommand`) moved
+from `read_events_and_execute`, where it re-sent every part's command every
+round, to `Namespace.evaluate`, after the observers are attached; it now runs
+once, during `vm.init()`. The per-round re-send dated from commit `274e507`,
+so that a part added by a HOTSWAP edit would be picked up. That no longer
+applies: updates edit the registry and never re-walk the AST, so no part
+appears on its own; and re-sending never synced live changes either
+(`Factory.instantiate_machine` ignores a part it already has, which is why
+`set_attributes` exists). An update that adds a part (deferred) must create
+its machine and attach its observer itself.
 
 **Whether anyone will ask: the `lockstep_enabled` flag (decided 2026-10-29).**
 The interpreter blocks at the start of a round until the simulation's question

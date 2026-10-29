@@ -386,12 +386,19 @@ def _drain(q) -> list:
     return items
 
 
+def _step_round(vm: VirtualMachine) -> None:
+    """Step every state machine once, so the round ends and the next one
+    starts (where the SynchronizationManager flushes its batch)."""
+    for _ in syntax.executable_state_usages(vm.state.sysml.lookup_table_executable_state_usages):
+        vm.step()
+
+
 def test_applied_update_sends_one_batch_with_the_changed_configured_values():
     # Runtime model -> simulation (design doc, Topic 10, "Syncing a runtime
     # change to the simulation"): pyecore notifications record which parts'
     # configured values changed during the update, and the bridge sends them as
-    # one batch right after it is applied. Observed values are refreshed for
-    # several parts first: they must not end up in the batch.
+    # one batch at the start of the next round. Observed values are refreshed
+    # for several parts first: they must not end up in the batch.
     vm = _build()
     _publish_and_refresh(vm, {
         TOKEN_DEPO: _token_depo_values(receiverSens=False),
@@ -401,7 +408,7 @@ def test_applied_update_sends_one_batch_with_the_changed_configured_values():
     vm._pending_update = updates.ChangeRuntimeAttributeValue(
         owner=TOKEN_DEPO, attribute="placementCoordinate",
         new_value=_factory_coordinate(x=25.0, y=30.0, degrees=180.0))
-    vm.step()
+    _step_round(vm)
     assert vm._pending_update is None
 
     [batch] = _drain(vm.state.channel.model_update_queue)

@@ -71,9 +71,10 @@ def run_interpreter_loop(vm: VirtualMachine, stop_event: threading.Event,
     if stop_event.is_set():
         return
 
-    # First step: enqueues an InstantiateCommand per Part described in the SysML
-    # model (PartInstantiation.evaluate() -> SimulationBridge.instantiate(),
-    # fire-and-forget). on_tick(), on the pygame thread, is what actually drains
+    # vm.init() already enqueued an InstantiateCommand per Part described in
+    # the SysML model (Namespace.evaluate() -> PartInstantiation.evaluate() ->
+    # SimulationBridge.instantiate(), fire-and-forget); this first step starts
+    # the first round. on_tick(), on the pygame thread, is what actually drains
     # these into `model` and prints each one as it happens -- this thread has no
     # way to know when that drain is done without adding new synchronization.
     vm.step()
@@ -112,17 +113,11 @@ def main() -> None:
         action-drain and snapshot-publish steps that follow), then
         publishes a fresh snapshot for the interpreter thread to read.
 
-        `read_events_and_execute()` (syntax.py) re-enqueues an
-        InstantiateCommand for every PartInstantiation on every reactive
-        tick, not just the first -- deliberately, so a part added later
-        (e.g. a HOTSWAP edit) gets picked up rather than never. Repeats
-        are idempotent on `model.instantiate_machine()`'s side (a no-op
-        past the first call for a given qualified_name), but the "was
-        this actually new" fact isn't visible from here without a
-        Factory-specific query, and `model` is meant to stay any
-        `BaseSimulationModel` -- so `already_printed` tracks it locally
-        instead, printing each part exactly once regardless of how many
-        more times its command gets redrained afterward.
+        `Namespace.evaluate()` (syntax.py) enqueues one InstantiateCommand
+        per PartInstantiation, once, during `vm.init()`; live
+        changes to a part's configured values arrive separately, on
+        `model_update_queue`. `model.instantiate_machine()` stays a no-op
+        for a qualified_name it already has.
         """
 
         channel: ThreadChannel = vm.state.channel

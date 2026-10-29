@@ -177,3 +177,45 @@ class SimulationBridge:
         EVENT-QUEUE-DESIGN.md).
         """
         channel.event_queue.put(EventCommand(item_name, source_qualified_name))
+
+
+class SynchronizationManager(RuntimeStateElement):
+    """Interpreter-side record of configured attribute values that live
+    updates changed, sent to the simulation as one batch per `flush`
+    (design doc, Language-Safe-and-Execution-Tranquility-points.md, Topic 10
+    "Syncing a runtime change to the simulation").
+
+    A `RuntimeStateElement` reached as `runtime.synchronization_manager`,
+    registered next to the channel. Unlike `ThreadChannel`, it is used by the
+    interpreter thread only: the simulation thread never touches it.
+
+    The record is filled by language-specific observers, which convert each
+    changed value before calling `record` (the same split as instantiation:
+    the language converts, the bridge only enqueues). Updates always replace a
+    configured value rather than change it in place, so a value converted when
+    recorded is still the current one at `flush`.
+
+    self._record: qualified_name -> {attr_name: (custom_class_name, values)},
+        the shape of `SetAttributeCommand.parts`; the last change to an
+        attribute wins
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._record = {}
+
+    def record(self, qualified_name: str, attr_name: str, value: tuple) -> None:
+        """Remember that `attr_name` of part `qualified_name` now holds
+        `value`, a `(custom_class_name, values)` pair."""
+        self._record.setdefault(qualified_name, {})[attr_name] = value
+
+    def flush(self, channel: ThreadChannel) -> None:
+        """Sends everything recorded since the last flush as one
+        `SetAttributeCommand`, then starts a new record. Sends nothing when
+        nothing was recorded, so a batch on the queue always means changes
+        to apply.
+        """
+        if not self._record:
+            return
+        SimulationBridge.set_attributes(channel, self._record)
+        self._record = {}

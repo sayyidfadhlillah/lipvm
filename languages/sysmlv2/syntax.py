@@ -12,7 +12,8 @@ from core.operation import operation
 # its own `StateUsage` class below; `rt.StateUsage` keeps the runtime
 # registry's StateUsage unambiguous from the AST's.
 from languages.sysmlv2 import runtime as rt
-from languages.sysmlv2.simulation_models.facade_proxy import ThreadChannel
+from languages.sysmlv2.observers import ConfiguredValueObserver
+from languages.sysmlv2.simulation_models.facade_proxy import SynchronizationManager, ThreadChannel
 from languages.sysmlv2.sysml_utility_classes import qualified_name
 from languages.sysmlv2.kerml_libraries.kerml_library_index import resolve_kerml_library_name
 
@@ -1015,13 +1016,14 @@ endif
 
     def read_events_and_execute(self, runtime, executable_stats):
 
-        # Part instantiation (parsed from SysML model and to be performed by the simulation model) and
-        # event occurrences (produced by the simulation model and to be evaluated according to the SysML model)
-        # are constantly checked for every VM step
+        # Event occurrences (produced by the simulation model and to be
+        # evaluated according to the SysML model) are checked every round
         if runtime.channel is not None:
+            # Start of a round: send what live updates changed during the
+            # previous one, as one batch.
+            runtime.synchronization_manager.flush(runtime.channel)
+
             part_instantiation_elements = part_instantiations(runtime.sysml.lookup_table_part_instantiations)
-            for an_instantiation in part_instantiation_elements:
-                an_instantiation.evaluate(runtime)
 
             drain_event_queue(runtime.channel, runtime.sysml.lookup_table_item_defs, executable_stats)
 
@@ -1044,6 +1046,18 @@ endif
 
         #Initialization for Bridge to the simulation
         runtime.elements.append(ThreadChannel(name="channel"))
+
+        # The registry is built. For each running part, once: watch its
+        # configured values, so live updates' changes are sent to the
+        # simulation, and ask the simulation to create its machine. Updates
+        # edit the registry, never re-walk the AST, so no part appears later;
+        # an update that adds one (not supported yet) must do both itself.
+        synchronization_manager = SynchronizationManager(name="synchronization_manager")
+        runtime.elements.append(synchronization_manager)
+        for part in part_instantiations(sysml_state.lookup_table_part_instantiations):
+            ConfiguredValueObserver(part, synchronization_manager)
+            part.evaluate(runtime)
+
         runtime.elements.append(rt.ExecutionContext(name="execution_context"))
 
         executable_stats = executable_state_usages(runtime.sysml.lookup_table_executable_state_usages)
