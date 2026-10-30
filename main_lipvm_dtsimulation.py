@@ -17,11 +17,14 @@ below -- nothing else in this file needs to change.
 """
 
 import argparse
+import queue
 import threading
 import time
+from dataclasses import dataclass
 
 from core.language import Scenario
-from core.vm import VirtualMachine
+from core.vm import ProgramUpdateOption, VirtualMachine
+from languages.sysmlv2.updates import AtomicUpdate
 from languages.sysmlv2.simulation_models.facade_proxy import SimulationBridge, ThreadChannel
 from languages.sysmlv2.simulation_models.fischertechnik.factory import Factory
 from languages.sysmlv2.simulation_models.fischertechnik.factory_visualization import FischertechnikVisualization
@@ -52,19 +55,73 @@ def build_simulation(sysml_path: str, simulation_model_class: type[BaseSimulatio
 
     return vm, model
 
+@dataclass(frozen=True)
+class SubmittedUpdate:
+    """An update file's updates on their way to the interpreter thread
+    (window -> interpreter, `update_queue`): `name` is the file's name, for
+    messages; `update` its `UPDATES` as one AtomicUpdate (see
+    languages/sysmlv2/update_inbox.py)."""
+    name: str
+    update: AtomicUpdate
+
+@dataclass(frozen=True)
+class UpdateStatus:
+    """What became of a SubmittedUpdate (interpreter -> window,
+    `update_results`): `kind` is "submitted" (now pending in the VM, waiting
+    for tranquility) or "rejected" (it can't be applied, never reached the
+    VM); `message` says more."""
+    kind: str
+    name: str
+    message: str
+
+def _hand_over_update(vm: VirtualMachine, update_queue: queue.Queue, update_results: queue.Queue) -> None:
+    """Between two `vm.step()` calls, on the interpreter thread: if no update
+    is pending (the VM holds one at a time), takes the next queued one,
+    checks it against the running model and submits it.
+
+    Checked here, before `vm.submit`, because the registry belongs to this
+    thread, and because an update that fails inside `apply()` would raise out
+    of `vm.step()`, ending this thread and staying pending. Only the errors a
+    wrong update file produces are caught (`LookupError`: unknown part or
+    attribute; `ValueError`: a part def as owner); anything else is a bug and
+    is raised.
+    """
+    if vm.has_pending_update():
+        return
+    try:
+        item = update_queue.get_nowait()
+    except queue.Empty:
+        return
+
+    try:
+        item.update.check(vm.state)
+        item.update.affected_elements(vm.state)
+    except (LookupError, ValueError) as error:
+        status = UpdateStatus("rejected", item.name, str(error))
+    else:
+        vm.submit(item.update, ProgramUpdateOption.HOTSWAP)
+        status = UpdateStatus("submitted", item.name,
+                              f"{len(item.update.updates)} update(s) pending, waiting for tranquility")
+    print(f"Update {item.name} {status.kind}: {status.message}")
+    update_results.put(status)
+
 def run_interpreter_loop(vm: VirtualMachine, stop_event: threading.Event,
-                          started_event: threading.Event, tick_delay: float) -> None:
+                          started_event: threading.Event, tick_delay: float,
+                          update_queue: queue.Queue, update_results: queue.Queue) -> None:
     """
     The actual behaviour of the interpreter loop, which will live in the Background thread.
     Waits for `started_event` (set when the simulation visualization execute `on_start` method described in
     the `main` method), then does the model's one-time eager part-instantiation pass and repeatedly
-    steps the VM until `stop_event` is set.
+    steps the VM until `stop_event` is set. Before each step, hands a queued update over to the VM
+    (`_hand_over_update`).
 
     vm: LipVM virtual machine which will interpret the SysML model
     model: the actual simulation model class to be used
     stop_event: signals the loop to stop once set (e.g. when the visualization window closes)
     started_event: signals the interpreter thread to start, which is performed by the Main thread
     tick_delay: seconds to sleep between reactive passes
+    update_queue: SubmittedUpdates from the window, to hand over to the VM
+    update_results: where each one's UpdateStatus is reported back to the window
     """
 
     started_event.wait()
@@ -82,6 +139,7 @@ def run_interpreter_loop(vm: VirtualMachine, stop_event: threading.Event,
     # Continue to execute LipVM virtual machine step until the stop signal is performed in the main thread
     while not stop_event.is_set():
         time.sleep(tick_delay)
+        _hand_over_update(vm, update_queue, update_results)
         vm.step()
 
 def main() -> None:
@@ -98,6 +156,10 @@ def main() -> None:
 
     stop_event = threading.Event()
     started_event = threading.Event()
+    # Live updates: SubmittedUpdates from the window to the interpreter
+    # thread, and their UpdateStatus back.
+    update_queue: queue.Queue[SubmittedUpdate] = queue.Queue()
+    update_results: queue.Queue[UpdateStatus] = queue.Queue()
 
     def on_start() -> None:
         """Start button's click handler. Just releases the interpreter
@@ -136,7 +198,8 @@ def main() -> None:
         channel.latest_snapshot.publish(model.build_snapshot())
 
     interpreter_thread = threading.Thread(
-        target=run_interpreter_loop, args=(vm, stop_event, started_event, args.tick_delay),
+        target=run_interpreter_loop,
+        args=(vm, stop_event, started_event, args.tick_delay, update_queue, update_results),
         daemon=True,
     )
     interpreter_thread.start()
