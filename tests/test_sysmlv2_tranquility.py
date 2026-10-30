@@ -10,6 +10,8 @@ failing to collect.
 
 import types
 
+import pytest
+
 from core.language import Scenario
 from core.vm import ProgramUpdateOption, VirtualMachine
 
@@ -464,3 +466,88 @@ def test_update_arriving_mid_round_waits_for_values_copied_while_paused():
 
     vm.step()  # checkpoint before round 3's machine 1: tokenDepo is tranquil, so it is applied
     assert vm._pending_update is None
+
+
+# --- AtomicUpdate: a list of updates applied as one (design doc, Topic 9) ---
+# Written ahead of the implementation. `updates.AtomicUpdate` is looked up on
+# the module inside each test, so that until it exists each test fails on its
+# own rather than the whole module failing to collect.
+
+DEPO_BEFORE = {"x": "20.0", "y": "35.0", "degrees": "270.0"}
+FEEDER_BEFORE = {"x": "13.0", "y": "20.0", "degrees": "0.0"}
+
+
+def _move_depo_and_feeder(feeder_attribute: str = "placementCoordinate"):
+    """An AtomicUpdate moving tokenDepo and cbFeeder together; a misspelled
+    `feeder_attribute` makes its second member fail."""
+    return updates.AtomicUpdate([
+        updates.ChangeRuntimeAttributeValue(
+            owner=TOKEN_DEPO, attribute="placementCoordinate",
+            new_value=_factory_coordinate(x=25.0, y=30.0, degrees=180.0)),
+        updates.ChangeRuntimeAttributeValue(
+            owner=CB_FEEDER, attribute=feeder_attribute,
+            new_value=_factory_coordinate(x=15.0, y=22.0, degrees=90.0)),
+    ])
+
+
+def test_atomic_update_waits_until_every_affected_part_is_tranquil():
+    # Every member's condition must hold at the same checkpoint: tokenDepo
+    # alone being tranquil isn't enough while cbFeeder is moving.
+    vm = _build()
+    update = _move_depo_and_feeder()
+    vm._pending_update = update
+
+    _publish_and_refresh(vm, {
+        TOKEN_DEPO: _token_depo_values(receiverSens=False),
+        CB_FEEDER: _conveyor_belt_values(currentCommand=ConveyorCommandKind.MOVE_TO_SENSOR),
+    })
+    vm.step()
+    assert vm._pending_update is update
+    assert _placement_coordinate(vm, TOKEN_DEPO) == DEPO_BEFORE
+    assert _placement_coordinate(vm, CB_FEEDER) == FEEDER_BEFORE
+
+    _publish_and_refresh(vm, {
+        TOKEN_DEPO: _token_depo_values(receiverSens=False),
+        CB_FEEDER: _conveyor_belt_values(),
+    })
+    vm.step()
+    assert vm._pending_update is None
+    assert _placement_coordinate(vm, TOKEN_DEPO) == {"x": "25.0", "y": "30.0", "degrees": "180.0"}
+    assert _placement_coordinate(vm, CB_FEEDER) == {"x": "15.0", "y": "22.0", "degrees": "90.0"}
+
+
+def test_atomic_update_with_a_failing_member_changes_nothing():
+    # cbFeeder doesn't redefine `placementCoordinat`: the second member can't
+    # be applied, so the first must not be either. Every member is checked
+    # before any is applied.
+    vm = _build()
+    _publish_and_refresh(vm, {
+        TOKEN_DEPO: _token_depo_values(receiverSens=False),
+        CB_FEEDER: _conveyor_belt_values(),
+    })
+    vm._pending_update = _move_depo_and_feeder(feeder_attribute="placementCoordinat")
+
+    with pytest.raises(LookupError):
+        vm.step()
+    assert _placement_coordinate(vm, TOKEN_DEPO) == DEPO_BEFORE
+    assert _placement_coordinate(vm, CB_FEEDER) == FEEDER_BEFORE
+
+
+def test_applied_atomic_update_sends_one_batch_for_every_affected_part():
+    # The simulation applies the whole group in the same frame: one
+    # SetAttributeCommand carrying both parts' new values.
+    vm = _build()
+    _publish_and_refresh(vm, {
+        TOKEN_DEPO: _token_depo_values(receiverSens=False),
+        CB_FEEDER: _conveyor_belt_values(),
+        VGR: _vgr_values(),
+    })
+    vm._pending_update = _move_depo_and_feeder()
+    _step_round(vm)
+    assert vm._pending_update is None
+
+    [batch] = _drain(vm.state.channel.model_update_queue)
+    assert batch.parts == {
+        TOKEN_DEPO: {"placementCoordinate": ("FactoryCoordinate", {"x": 25.0, "y": 30.0, "degrees": 180.0})},
+        CB_FEEDER: {"placementCoordinate": ("FactoryCoordinate", {"x": 15.0, "y": 22.0, "degrees": 90.0})},
+    }
