@@ -18,6 +18,10 @@ UPDATES = [
 ]
 ```
 
+Examples to copy from are in `examples/` (start with
+`examples/move_token_depo.py`, which moves the token depot and shows how to
+build a `placementCoordinate` value).
+
 Ignored here: files whose name starts with `_` or `.`, anything that isn't a
 `.py` file (like this README), and subfolders, including `applied/`. Loading
 lives in `languages/sysmlv2/update_inbox.py`; the folder can be changed with

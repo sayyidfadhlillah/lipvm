@@ -1,6 +1,6 @@
 import dataclasses
 from abc import ABC, abstractmethod
-from typing import Tuple, Optional
+from typing import Callable, Tuple, Optional
 
 
 class BaseSimulationModel(ABC):
@@ -69,16 +69,36 @@ class BaseSimulationModel(ABC):
         """
         raise NotImplementedError("Sub-class must implement this method.")
 
+@dataclasses.dataclass(frozen=True)
+class LiveUpdateState:
+    """What a visualization shows for live updates (the "update button"),
+    provided by the driver each frame through `run()`'s `live_update`: the
+    button's label, whether it can be clicked, and lines to show under it
+    (e.g. that an update waits for tranquility, or why a file was rejected).
+    The visualization only draws it; the driver decides everything.
+    """
+    label: str
+    enabled: bool
+    messages: tuple[str, ...] = ()
+
+
 class SimulationVisualization(ABC):
     """Shared base for a domain's own rendering of its `BaseSimulationModel`
     -- `run()` is the only method called from outside the concrete
     visualization; everything else (drawing, click handling) stays
     private to that implementation.
+
+    `live_update`/`on_submit_update` (optional, both or neither): a function
+    returning the current LiveUpdateState, asked every frame, and the
+    function to call when its button is clicked while enabled. Without
+    them, no live-update controls are shown.
     """
 
     @abstractmethod
     def run(self, model: BaseSimulationModel, on_start=lambda: None,
-            on_tick=lambda: None, tick_rate: int = 60) -> None:
+            on_tick=lambda: None, tick_rate: int = 60,
+            live_update: Optional[Callable[[], LiveUpdateState]] = None,
+            on_submit_update: Optional[Callable[[], None]] = None) -> None:
         raise NotImplementedError("Sub-class must implement this method.")
 
 class ActionSimulationModel(ABC):

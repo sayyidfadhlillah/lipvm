@@ -18,19 +18,25 @@ below -- nothing else in this file needs to change.
 
 import argparse
 import itertools
+import os
 import queue
 import threading
 import time
 from dataclasses import dataclass
+from typing import Optional
 
 from core.language import Scenario
 from core.vm import ProgramUpdateOption, VirtualMachine
+from languages.sysmlv2.update_inbox import InboxState, UpdateFileError, UpdateInbox
 from languages.sysmlv2.updates import AtomicUpdate
 from languages.sysmlv2.simulation_models.facade_proxy import SimulationBridge, ThreadChannel
 from languages.sysmlv2.simulation_models.fischertechnik.factory import Factory
 from languages.sysmlv2.simulation_models.fischertechnik.factory_visualization import FischertechnikVisualization
-from languages.sysmlv2.simulation_models.generic import BaseSimulationModel, SimulationVisualization
+from languages.sysmlv2.simulation_models.generic import BaseSimulationModel, LiveUpdateState, SimulationVisualization
 from tools.load_sysml import load
+
+# Where update files are dropped during a live demo (see updates/README.md); --updates-dir overrides it.
+DEFAULT_UPDATES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "updates")
 
 # A Dict describing what Simulation Model and Visualization is ready to be used as part of this CLI
 REGISTERED_SIMULATION_MODELS: dict[str, tuple[type[BaseSimulationModel], type[SimulationVisualization]]] = {
@@ -105,6 +111,96 @@ def _hand_over_update(vm: VirtualMachine, update_queue: queue.Queue, update_resu
                               f"{len(item.update.updates)} update(s) pending, waiting for tranquility")
     print(f"Update {item.name} {status.kind}: {status.message}")
     update_results.put(status)
+
+WAITING_MESSAGE = "There is an update to the model. Waiting to reach tranquility"
+
+class LiveUpdateControl:
+    """The driver's side of the update button (main thread): what the
+    visualization shows, asked every frame (`state`), and what a click does
+    (`submit`).
+
+    The button is enabled when the update folder holds exactly one update
+    file and no update is on its way: neither pending in the VM nor
+    submitted and still waiting for the interpreter thread to take it. A
+    click loads the file into one AtomicUpdate, puts it on `update_queue`
+    and moves the file to `applied/`; a file that doesn't load stays where
+    it is, with the reason shown. The interpreter thread's answers
+    (`update_results`) and the moment a pending update is applied are shown
+    as the latest message.
+    """
+
+    def __init__(self, inbox: UpdateInbox, vm: VirtualMachine, update_queue: queue.Queue,
+                 update_results: queue.Queue, poll_interval: float = 0.5):
+        self._inbox = inbox
+        self._vm = vm
+        self._update_queue = update_queue
+        self._update_results = update_results
+        self._poll_interval = poll_interval
+        self._inbox_state = InboxState(file=None)
+        self._checked_at = float("-inf")
+        self._submitted: Optional[str] = None   # file name on its way to the VM, until its UpdateStatus
+        self._pending: Optional[str] = None     # file name pending in the VM, until applied
+        self._last_message: Optional[str] = None
+
+    def state(self) -> LiveUpdateState:
+        self._take_results()
+        if self._pending is not None and not self._vm.has_pending_update():
+            self._last_message = f"{self._pending} applied"
+            self._pending = None
+        if time.monotonic() - self._checked_at >= self._poll_interval:
+            self._inbox_state = self._inbox.state()
+            self._checked_at = time.monotonic()
+
+        messages = []
+        if self._pending is not None or self._submitted is not None:
+            messages.append(WAITING_MESSAGE)
+        if self._inbox_state.message:
+            messages.append(self._inbox_state.message)
+        if self._last_message:
+            messages.append(self._last_message)
+
+        if self._pending is not None or self._submitted is not None:
+            label, enabled = f"Update pending: {self._pending or self._submitted}", False
+        elif self._inbox_state.ready:
+            label, enabled = f"Submit update: {os.path.basename(self._inbox_state.file)}", True
+        elif self._inbox_state.message:   # e.g. more than one file
+            label, enabled = "One update file at a time", False
+        else:
+            label, enabled = f"No update file in {os.path.basename(self._inbox.folder)}/", False
+        return LiveUpdateState(label, enabled, tuple(messages))
+
+    def submit(self) -> None:
+        self._inbox_state = self._inbox.state()   # the folder may have changed since the last check
+        self._checked_at = time.monotonic()
+        if not self._inbox_state.ready or self._submitted is not None or self._vm.has_pending_update():
+            return
+        path = self._inbox_state.file
+        name = os.path.basename(path)
+        try:
+            update = self._inbox.load(path)
+        except UpdateFileError as error:
+            self._last_message = f"Not submitted, {error} (the file stays in {os.path.basename(self._inbox.folder)}/)"
+            print(self._last_message)
+            return
+        self._update_queue.put(SubmittedUpdate(name, update))
+        self._inbox.mark_applied(path)
+        self._submitted = name
+        self._last_message = f"{name} submitted"
+        self._inbox_state = self._inbox.state()
+
+    def _take_results(self) -> None:
+        while True:
+            try:
+                status = self._update_results.get_nowait()
+            except queue.Empty:
+                return
+            if status.name == self._submitted:
+                self._submitted = None
+            if status.kind == "submitted":
+                self._pending = status.name
+                self._last_message = f"{status.name} submitted"
+            else:
+                self._last_message = f"{status.name} rejected: {status.message}"
 
 def _apply_queued_commands(channel: ThreadChannel, model: BaseSimulationModel) -> None:
     """Simulation thread: applies what the interpreter queued, in this order:
@@ -198,6 +294,8 @@ def main() -> None:
     parser.add_argument("sysml", help=f"Path to the .sysml model to run")
     parser.add_argument("--tick-delay", type=float, default=0.02,
                          help="Seconds between interpreter reactive passes (default: 0.02)")
+    parser.add_argument("--updates-dir", default=DEFAULT_UPDATES_DIR,
+                        help="Folder watched for update files during the demo (default: updates/ next to this file)")
     parser.add_argument("--simulation-model", choices=sorted(REGISTERED_SIMULATION_MODELS),
                         help="Which simulation domain to run", required=True)
     args = parser.parse_args()
@@ -268,7 +366,9 @@ def main() -> None:
     interpreter_thread.start()
 
     try:
-        visualization_class().run(model, on_start, on_tick)  # blocks on the main thread until the window closes
+        live_update = LiveUpdateControl(UpdateInbox(args.updates_dir), vm, update_queue, update_results)
+        visualization_class().run(model, on_start, on_tick,  # blocks on the main thread until the window closes
+                                  live_update=live_update.state, on_submit_update=live_update.submit)
     finally:
         stop_event.set()
         started_event.set()  # release the interpreter thread if it's still waiting on "Start"
