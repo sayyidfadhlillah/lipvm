@@ -173,12 +173,58 @@ class Factory(BaseSimulationModel):
         instance = klass(self)
         instance.name = qualified_name
 
-        custom_attribute_registry = scan_for_subclasses(CustomAttributeModel)
         for attr_name, (custom_class_name, values) in attrs.items():
-            setattr(instance, attr_name, custom_attribute_registry[custom_class_name](**values))
+            setattr(instance, attr_name, self._custom_attribute_value(custom_class_name, values))
 
         self.register_machine(instance)
         print(f"Machine {part_def_name} with name {qualified_name} is Instantiated")
+
+    @staticmethod
+    def _custom_attribute_value(custom_class_name: str, values: dict):
+        """Builds the simulation-side object for one custom attribute value
+        (e.g. a FactoryCoordinate), resolved against the CustomAttributeModel
+        registry -- shared by instantiate_machine and set_attribute, so both
+        build attribute values the same way.
+        """
+        return scan_for_subclasses(CustomAttributeModel)[custom_class_name](**values)
+
+    def set_attribute(self, qualified_name: str, attrs: dict) -> None:
+        """The simulation side of a live update (a `SetAttributeCommand`
+        batch, drained in main_lipvm_dtsimulation.py's `on_tick`): gives an
+        existing machine new configured values, e.g. a new
+        placementCoordinate. Machines compute positions from their
+        attributes when needed, so the change shows from the next frame.
+
+        Only sets the values: whether it was safe to change them now is the
+        interpreter's decision (the update's tranquility), not compensated
+        here (e.g. tokens on a moved belt are not moved along).
+
+        Converts every value before setting any, so a bad entry leaves the
+        machine unchanged. Raises KeyError for an unknown machine,
+        TypeError for a value that isn't a (custom_class_name, values) pair
+        (scalars aren't supported yet, as at instantiation), and
+        AttributeError for an attribute the machine doesn't have, rather
+        than letting setattr create a new one.
+        """
+        machine = self.get_machine(qualified_name)
+        if machine is None:
+            raise KeyError(f"No machine named {qualified_name!r} to set attributes on")
+
+        new_values = {}
+        for attr_name, value in attrs.items():
+            if not (isinstance(value, tuple) and len(value) == 2):
+                raise TypeError(f"{qualified_name}.{attr_name}: expected a (custom_class_name, values) "
+                                f"pair, got {value!r}; scalar values aren't supported yet")
+            if not hasattr(machine, attr_name):
+                raise AttributeError(f"{qualified_name} ({type(machine).__name__}) has no attribute {attr_name!r}")
+            custom_class_name, values = value
+            new_values[attr_name] = self._custom_attribute_value(custom_class_name, values)
+
+        for attr_name, new_value in new_values.items():
+            setattr(machine, attr_name, new_value)
+        print(f"Machine {qualified_name}: set " + ", ".join(
+            f"{name}={class_name}({', '.join(f'{k}={v}' for k, v in values.items())})"
+            for name, (class_name, values) in attrs.items()))
 
     def execute_action(self, qualified_name: str, action_name: str, args: dict) -> None:
         """Looks up the machine and calls the named action on it with

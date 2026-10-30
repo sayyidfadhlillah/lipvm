@@ -21,6 +21,18 @@ class BaseSimulationModel(ABC):
         raise NotImplementedError("Sub-class must implement this method.")
 
     @abstractmethod
+    def set_attribute(self, qualified_name: str, attrs: dict) -> None:
+        """Gives an already-instantiated part new configured attribute
+        values, from a live update (one entry of a `SetAttributeCommand`
+        batch, see facade_proxy.py); takes effect from the next tick.
+
+        :param qualified_name: the part's full SysML name
+        :param attrs: attr_name -> (custom_class_name, values) pairs, same shape as instantiate_machine's
+        :return: None
+        """
+        raise NotImplementedError("Sub-class must implement this method.")
+
+    @abstractmethod
     def execute_action(self, qualified_name: str, action_name: str, args: dict) -> None:
         """Calls a named action on an already-instantiated part.
 
