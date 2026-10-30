@@ -137,6 +137,13 @@ class TranquilUpdate(SysmlUpdate):
         return all(element.is_tranquil(runtime)
                    for element in self.affected_elements(runtime))
 
+    def check(self, runtime: RuntimeState) -> None:
+        """Raises if this update can't be applied to `runtime` (e.g. the
+        attribute it changes doesn't exist); changes nothing. Lets an
+        AtomicUpdate check every member before applying any, and a driver
+        reject an update before submitting it. Nothing to check by default.
+        """
+
 
 class ChangeRuntimeAttributeValue(TranquilUpdate):
     """A runtime change: give an attribute of a running part usage (e.g.
@@ -166,11 +173,72 @@ class ChangeRuntimeAttributeValue(TranquilUpdate):
                 f"change, not a runtime one.")
         return [_part_instantiation(runtime, self._owner)]
 
-    def apply(self, runtime: RuntimeState) -> None:
+    def _redefinition(self, runtime: RuntimeState) -> rt.AttributeRedefinition:
         part = _part_instantiation(runtime, self._owner)
         redefinition = next((r for r in part.attribute_redefinitions if r.name == self._attribute), None)
         if redefinition is None:
             raise LookupError(
                 f"{self._owner!r} doesn't redefine {self._attribute!r} "
                 f"(redefined: {sorted(r.name for r in part.attribute_redefinitions)}).")
-        redefinition.value = self._new_value
+        return redefinition
+
+    def check(self, runtime: RuntimeState) -> None:
+        """Raises LookupError if the owner isn't a running part usage or
+        doesn't redefine the attribute."""
+        self._redefinition(runtime)
+
+    def apply(self, runtime: RuntimeState) -> None:
+        self._redefinition(runtime).value = self._new_value
+
+
+class AtomicUpdate(TranquilUpdate):
+    """A list of tranquil updates applied as one (design doc, Topic 9
+    "Atomic application of a list of updates"): at the same checkpoint, all
+    or nothing. `condition()` is TranquilUpdate's, over the members' affected
+    elements: the group waits until every part any member changes is
+    tranquil.
+
+    `apply()` checks every member before applying any, so a member that
+    can't be applied leaves the runtime model unchanged. The simulation gets
+    one batch for the whole group, since the observers record every member's
+    change and the SynchronizationManager flushes once, at the next round
+    start.
+
+    Members are registry migrations: a member carrying an edit script is
+    rejected, as is an empty list or a member that isn't a TranquilUpdate
+    (it couldn't say what it affects).
+    """
+
+    def __init__(self, updates: list[TranquilUpdate], **kwargs) -> None:
+        super().__init__(**kwargs)
+        updates = list(updates)
+        if not updates:
+            raise ValueError("An AtomicUpdate needs at least one update.")
+        for update in updates:
+            if not isinstance(update, TranquilUpdate):
+                raise ValueError(f"An AtomicUpdate's members must be TranquilUpdates, got {update!r}.")
+            if update.edit_script is not None:
+                raise ValueError(f"An AtomicUpdate's members can't carry an edit script ({update!r}).")
+        self._updates = updates
+
+    @property
+    def updates(self) -> list[TranquilUpdate]:
+        return list(self._updates)
+
+    def affected_elements(self, runtime: RuntimeState) -> list[rt.TranquilityHolder]:
+        """Every member's affected elements, each once, in member order."""
+        elements = []
+        for update in self._updates:
+            for element in update.affected_elements(runtime):
+                if not any(element is seen for seen in elements):
+                    elements.append(element)
+        return elements
+
+    def check(self, runtime: RuntimeState) -> None:
+        for update in self._updates:
+            update.check(runtime)
+
+    def apply(self, runtime: RuntimeState) -> None:
+        self.check(runtime)
+        for update in self._updates:
+            update.apply(runtime)
