@@ -200,7 +200,7 @@ package Main {
         part battery1 : Battery {
             attribute :>> capacity = 10.0;
             attribute :>> maxPower = 4.5;
-            attribute :>> reserve = 0.5;
+            attribute :>> reserve = 0.1;
             attribute :>> peakLimit = 4.0;
             attribute :>> chargePrice = 0.07;
             attribute :>> dischargePrice = 0.20;
@@ -212,8 +212,10 @@ package Main {
             attribute :>> durationHours = 2.0;
         }
 
+        // Step 2 of the demo: add these two parts (remove the comment markers).
+        /*
         part heatPump1 : HeatPump {
-            attribute :>> setpoint = 19.0;
+            attribute :>> setpoint = 21.0;
             attribute :>> cop = 3.0;
         }
 
@@ -222,11 +224,12 @@ package Main {
             attribute :>> chargeStartHour = 17.0;
             attribute :>> durationHours = 4.0;
         }
+        */
     }
 
     part grid1 : Grid;
 
-    state batteryControl : PeakShaving {
+    state batteryControl : SelfConsumption {
         in battery = house1.battery1;
         in house = house1;
         in grid = grid1;
