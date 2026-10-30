@@ -231,6 +231,15 @@ class SynchronizationManager(RuntimeStateElement):
         self._owed_answer = None
         self._last_answered = None
 
+    @property
+    def simulation_waiting(self) -> bool:
+        """Whether the simulation is blocked waiting for this manager's "go"
+        (a question was taken and not yet answered; it is answered at the
+        next round start). The driver doesn't pause between steps meanwhile,
+        so the answer isn't delayed, e.g. for the rest of the round in which
+        an update was applied."""
+        return self._owed_answer is not None
+
     def record(self, qualified_name: str, attr_name: str, value: tuple) -> None:
         """Remember that `attr_name` of part `qualified_name` now holds
         `value`, a `(custom_class_name, values)` pair."""

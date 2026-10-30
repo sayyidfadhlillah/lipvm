@@ -17,6 +17,7 @@ below -- nothing else in this file needs to change.
 """
 
 import argparse
+import itertools
 import queue
 import threading
 import time
@@ -105,6 +106,49 @@ def _hand_over_update(vm: VirtualMachine, update_queue: queue.Queue, update_resu
     print(f"Update {item.name} {status.kind}: {status.message}")
     update_results.put(status)
 
+def _apply_queued_commands(channel: ThreadChannel, model: BaseSimulationModel) -> None:
+    """Simulation thread: applies what the interpreter queued, in this order:
+    instantiations (so a part created now exists for what follows), live
+    update batches (one SetAttributeCommand per applied update, its parts'
+    new configured values), actions.
+    """
+    while not channel.instantiate_queue.empty():
+        command = channel.instantiate_queue.get_nowait()
+        model.instantiate_machine(command.qualified_name, command.part_def_name, command.attrs)
+
+    while not channel.model_update_queue.empty():
+        command = channel.model_update_queue.get_nowait()
+        for qualified_name, attrs in command.parts.items():
+            model.set_attribute(qualified_name, attrs)
+
+    while not channel.action_queue.empty():
+        command = channel.action_queue.get_nowait()
+        model.execute_action(command.qualified_name, command.action_name, command.args)
+
+def _wait_for_go(channel: ThreadChannel, frame: int, interpreter_thread: threading.Thread) -> None:
+    """Simulation thread, lockstep (design doc, Topic 10): asks "may I move
+    past `frame`?" and blocks until the interpreter's "go" for that frame,
+    sent at the start of the round after the one that took the question
+    (normally one round, a few milliseconds).
+
+    Waits in 0.1 s slices and raises if the interpreter thread has ended
+    meanwhile (e.g. an exception in an update's apply()), instead of
+    freezing the window; raises if the answer is for another frame.
+    """
+    channel.move_request_queue.put(frame)
+    while True:
+        try:
+            answer = channel.move_permission_queue.get(timeout=0.1)
+        except queue.Empty:
+            if not interpreter_thread.is_alive():
+                raise RuntimeError(f"The interpreter thread ended while the simulation waited "
+                                   f"for permission to move past frame {frame}")
+            continue
+        if answer != frame:
+            raise RuntimeError(f"The simulation asked to move past frame {frame}, "
+                               f"but got permission for frame {answer}")
+        return
+
 def run_interpreter_loop(vm: VirtualMachine, stop_event: threading.Event,
                           started_event: threading.Event, tick_delay: float,
                           update_queue: queue.Queue, update_results: queue.Queue) -> None:
@@ -138,7 +182,14 @@ def run_interpreter_loop(vm: VirtualMachine, stop_event: threading.Event,
 
     # Continue to execute LipVM virtual machine step until the stop signal is performed in the main thread
     while not stop_event.is_set():
-        time.sleep(tick_delay)
+        # No sleep while an update is pending: each round then waits for the
+        # simulation's question in SynchronizationManager.start_round
+        # (lockstep), so the window's frame rate paces the rounds instead.
+        # Nor while the simulation waits for its "go" (answered at the next
+        # round start): after an update is applied mid-round, sleeping before
+        # each remaining step would keep the window frozen (measured ~125 ms).
+        if not vm.has_pending_update() and not vm.state.synchronization_manager.simulation_waiting:
+            time.sleep(tick_delay)
         _hand_over_update(vm, update_queue, update_results)
         vm.step()
 
@@ -153,6 +204,12 @@ def main() -> None:
 
     model_class, visualization_class = REGISTERED_SIMULATION_MODELS[args.simulation_model]
     vm, model = build_simulation(args.sysml, model_class)
+    # Lockstep while an update is pending (design doc, Topic 10): the
+    # interpreter waits for the simulation's "may I move?" at each round
+    # start. Set before the interpreter thread starts; the channel exists
+    # since vm.init(). on_tick must ask whenever an update is pending,
+    # otherwise the interpreter waits forever.
+    vm.state.channel.lockstep_enabled = True
 
     stop_event = threading.Event()
     started_event = threading.Event()
@@ -168,12 +225,20 @@ def main() -> None:
         """
         started_event.set()
 
+    # Frame numbers for lockstep's questions (same idiom as Factory's token ids).
+    frames = itertools.count(1)
+
     def on_tick() -> None:
-        """Runs once per frame, after the model's own tick. Drains any
-        queued instantiate/action commands and applies them (instantiate
-        first, so a part created this call already exists for the
-        action-drain and snapshot-publish steps that follow), then
-        publishes a fresh snapshot for the interpreter thread to read.
+        """Runs once per frame, after the model's own tick. Applies the
+        queued commands (`_apply_queued_commands`), then publishes a fresh
+        snapshot for the interpreter thread to read.
+
+        While an update is pending (lockstep, design doc Topic 10): having
+        published, asks the interpreter "may I move past this frame?" and
+        waits for "go" (`_wait_for_go`), so the round that takes the
+        question copies the values of a paused simulation; then applies
+        what came with "go" (a live update's batch, actions), before the
+        next `model.tick()`.
 
         `Namespace.evaluate()` (syntax.py) enqueues one InstantiateCommand
         per PartInstantiation, once, during `vm.init()`; live
@@ -181,21 +246,19 @@ def main() -> None:
         `model_update_queue`. `model.instantiate_machine()` stays a no-op
         for a qualified_name it already has.
         """
-
+        frame = next(frames)
         channel: ThreadChannel = vm.state.channel
 
-        while not channel.instantiate_queue.empty():
-            command = channel.instantiate_queue.get_nowait()
-            model.instantiate_machine(command.qualified_name, command.part_def_name, command.attrs)
-
-        while not channel.action_queue.empty():
-            command = channel.action_queue.get_nowait()
-            model.execute_action(command.qualified_name, command.action_name, command.args)
+        _apply_queued_commands(channel, model)
 
         for item_name, source_qualified_name in model.drain_events():
             SimulationBridge.emit_event(channel, item_name, source_qualified_name)
 
         channel.latest_snapshot.publish(model.build_snapshot())
+
+        if vm.has_pending_update():
+            _wait_for_go(channel, frame, interpreter_thread)
+            _apply_queued_commands(channel, model)
 
     interpreter_thread = threading.Thread(
         target=run_interpreter_loop,
