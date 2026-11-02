@@ -116,7 +116,7 @@ built for.
     rebuilt env's exogenous arrays (weather/carbon-intensity/price) against
     wherever the simulation actually is — `simulation_start_time_step`, or
     replaying `live_weather_and_carbon_intensity()` up to the current hour
-    before resuming.
+    before resuming. Answered 2026-11-02 (below): `simulation_start_time_step`.
 
 **Ruled out:** per-device `next_time_step()` does *not* offer a finer-grained
 tick than `env.step()`. It exists on effectively every device (`Battery`,
@@ -132,6 +132,76 @@ arrays are indexed by one shared `env.time_step` counter, so calling one
 device's `next_time_step()` in isolation would desync its internal index
 from everything else silently, not raise. Milestone 1/2 above stand as the
 only real granularity CityLearn offers.
+
+### Discussed 2026-11-02 — Milestone 2 state transfer
+
+**Decided:** for now, the simulator (`CityLearnSimulation`) does the state
+transfer, not LipVM. A rebuild must be invisible: the house after the
+rebuild is the house before it, plus or minus the changed parts. When an
+update may be applied stays the job of the #Tranquility constraints; the
+transfer only hides how CityLearn is built, it doesn't compensate for an
+unsafe update.
+
+Which model changes need a rebuild:
+
+| Model change | Simulation side |
+|---|---|
+| Algorithm swap (state machine) | Nothing, LipVM only. |
+| Controller threshold (`chargePrice`, `peakLimit`, ...) | Nothing, guard values in SysML. |
+| Device parameter (battery `capacity`, `maxPower`, ...) | Open: some may be settable on the live object, but CityLearn sizes some internal arrays at `reset()`. Check per attribute; fall back to a rebuild. |
+| Add or remove a device or building | Rebuild. |
+
+Hooks in CityLearn 3.0.2 (`.venv`):
+
+- **Charge level:** `StorageDevice.initial_soc` is written into `soc[0]` by
+  `reset()` (`energy_model.py:951`). `force_set_soc()`
+  (`energy_model.py:883`) sets it after `reset()` instead.
+- **Time:** `CityLearnEnv(..., simulation_start_time_step=...)`
+  (`citylearn.py:164`) starts the weather, price and load data at the
+  current hour instead of hour 0.
+
+Rebuild steps, at a tick boundary, never inside `env.step()`:
+
+1. Read each live device's `soc[time_step]` and the env's absolute time step.
+2. Set `initial_soc` on those devices, add or remove buildings and devices,
+   construct the new `CityLearnEnv` with `simulation_start_time_step` at the
+   current absolute step.
+3. `reset()`, swap `self.env`.
+
+State to transfer:
+
+- Storage charge levels (`soc`), see above.
+- Absolute time: the new env's `time_step` restarts at 0, so
+  `CityLearnSimulation` keeps an offset; snapshots and the visualization show
+  absolute time.
+- History: per-step arrays (`soc`, energy balance, ...) live in the env and
+  are lost on rebuild, so the simulator keeps its own history (like the
+  mock's `history` deque).
+- Battery wear: `Battery.reset()` cuts `_capacity_history` back to its first
+  entry (`energy_model.py:1427-1428`), silently restoring lost capacity.
+  Either turn degradation off for the demo or carry `degraded_capacity` over.
+  Setting `capacity` restarts the history from that value
+  (`energy_model.py:1118`), but later wear is then computed from the reduced
+  capacity, so it drifts slightly.
+- Episode length: starting later shortens the remaining run unless
+  `episode_time_steps` / `simulation_end_time_step` are adjusted too.
+- Later: a `DeferrableAppliance` in the middle of a cycle
+  (`energy_model.py:1430`) and EV connections (Milestone 1b).
+
+`reset()` resets every device, not only the new ones, so any state not on
+this list is lost. Raise on a device type with no transfer rule rather than
+dropping its state silently.
+
+**Check:** a rebuild with no changes must not change the run: N steps with a
+rebuild at step k equal N steps without one, value for value.
+
+**Alternative considered:** our own executing simulator for the devices
+(fischertechnik-style: an action sets a command, `tick()` advances internal
+state, edges emit events), with the CityLearn dataset only for weather, sun,
+price and base load. Adding or removing a device is then
+`instantiate_machine` / `remove_machine`, with no rebuild and no transfer.
+Full CityLearn and this rebuild only pay off if we want CityLearn's device
+models or its reward/benchmark setup.
 
 ## Issue 2 — Actions aren't per-device method calls
 
@@ -234,4 +304,7 @@ when we're forced to.
 
 ## Status
 
-Discussion only — no SysML or Python changes made for any of these yet.
+Issue 1, Milestone 1a: implemented as `CityLearnSimulation`
+(`citylearn_simulation_model.py`), not yet running end to end (2026-10-28
+review blockers, see `MOCK-DEMO.md`, "Why not CityLearn"). Milestone 2:
+design only (2026-11-02, above). Issues 2 and 3: discussion only.
