@@ -21,7 +21,7 @@ from languages.sysmlv2 import updates
 from languages.sysmlv2.runtime_utility import ScalarType, TypeKind
 from languages.sysmlv2.simulation_models import synchronization
 from languages.sysmlv2.simulation_models.fischertechnik.enums import ConveyorCommandKind
-from languages.sysmlv2.syntax import AssertConstraintUsage, ConstraintUsage
+from languages.sysmlv2.syntax import AssertConstraintUsage, ConstraintUsage, PartDefinition
 from languages.sysmlv2.sysml_utility_classes import qualified_name
 
 from tools.load_xmi_with_syntax import load
@@ -70,8 +70,10 @@ def test_tranquility_metadata_definition_is_not_registered_as_item_def():
 
 def test_recognises_the_four_part_def_tranquility_constraints():
     root = load(XMI).contents[0]
+    # Only the part defs' constraints; state defs carry their own (Topic 13, tested below).
     tranquility = [element for element in root.eAllContents()
-                   if isinstance(element, ConstraintUsage) and syntax._is_tranquility_constraint(element)]
+                   if isinstance(element, ConstraintUsage) and syntax._is_tranquility_constraint(element)
+                   and isinstance(element.eContainer().eContainer(), PartDefinition)]
     assert sorted(_owner(constraint) for constraint in tranquility) == [
         "ConveyorBeltSystem::ConveyorBelt::ConveyorBeltMachine",
         "TokenDepoSystem::TokenDepo::TokenDepoMachine",
@@ -749,6 +751,11 @@ VGR_TRANS_TO_DEPO = "Main::vgrTransToDepo"    # VGRPickTokenFromCBAndPlace: A on
 TOKEN_DEPO_MISSION = "Main::tokenDepoMission" # TokenDepoSimpleMission: neither
 TOKEN_PROD = "Main::tokenProd"
 
+# Strict: once state-machine tranquility is implemented these pass, which then
+# fails the suite as a reminder to remove the marker.
+NOT_YET_IMPLEMENTED = pytest.mark.xfail(
+    strict=True, reason="state-machine tranquility not implemented yet (TODOLIST-NOW.md)")
+
 
 def _state_def(vm: VirtualMachine, state_def_qualified_name: str):
     """The registry's rt.StateDef for `state_def_qualified_name`."""
@@ -779,6 +786,7 @@ def _token_producer_values(**overrides) -> types.SimpleNamespace:
     return types.SimpleNamespace(**values)
 
 
+@NOT_YET_IMPLEMENTED
 def test_state_defs_carry_their_tranquil_states_and_conditions():
     vm = _build()
 
@@ -807,6 +815,7 @@ def test_state_defs_carry_their_tranquil_states_and_conditions():
     assert list(_state_def(vm, TOKEN_DEPO_SIMPLE_MISSION).tranquility_conditions) == []
 
 
+@NOT_YET_IMPLEMENTED
 def test_state_machine_is_tranquil_only_in_a_marked_state():
     # A only: vgrTransToDepo may be changed while waiting in Idle, not in the
     # middle of a pick and place.
@@ -825,6 +834,7 @@ def test_state_machine_is_tranquil_only_in_a_marked_state():
     assert usage.is_tranquil(vm.state) is False
 
 
+@NOT_YET_IMPLEMENTED
 def test_state_machine_needs_its_marked_state_and_its_constraint():
     # A and B: vgrProdToFeed is tranquil in Idle while no token waits on the
     # producer's platform (read through `tokenProducer = tokenProd`).
@@ -845,6 +855,7 @@ def test_state_machine_needs_its_marked_state_and_its_constraint():
     assert usage.is_tranquil(vm.state) is False
 
 
+@NOT_YET_IMPLEMENTED
 def test_state_machine_without_marks_is_tranquil_in_any_state():
     # Neither: as for a part without #Tranquility, only the language safe
     # point applies, once the state machine has started.

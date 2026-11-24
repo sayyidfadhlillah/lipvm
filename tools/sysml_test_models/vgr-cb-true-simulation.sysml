@@ -229,6 +229,10 @@ package VGRStates {
         state SafePosition;
         accept VGRCommandSuccessEventMessage via vgrOne 
             do vgrOne.moveToSafePosition
+            then MovingToSafePosition;
+
+        state MovingToSafePosition;
+        accept VGRCommandSuccessEventMessage via vgrOne
             then Idle;
 
         state Idle; 
@@ -239,7 +243,7 @@ package VGRStates {
             then WaitForPickup;
         accept StopEventMessage via vgrOne
             do vgrOne.moveToSafePosition
-            then FullStop;
+            then MovingToFullStop;
 
         state WaitForPickup;
         accept VGRCommandSuccessEventMessage via vgrOne
@@ -251,6 +255,10 @@ package VGRStates {
         state WaitForPlace;
         accept VGRCommandSuccessEventMessage via vgrOne
             then Idle;
+
+        state MovingToFullStop;
+        accept VGRCommandSuccessEventMessage via vgrOne
+            then FullStop;
 
         state FullStop {
             entry vgrOne.stop;

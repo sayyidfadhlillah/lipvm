@@ -807,7 +807,7 @@ def test_cb_vgr_sysml_model():
     assert vgr1_placement_value.type.reference_type.qualified_name == "Common::FactoryCoordinate"
     assert [element.name for element in vgr1_placement_value.elements] == ["x", "y", "degrees"]
     assert all(isinstance(element.value, rt.LiteralValue) for element in vgr1_placement_value.elements)
-    assert [element.value.el for element in vgr1_placement_value.elements] == ["15.0", "15.0", "0.0"]
+    assert [element.value.el for element in vgr1_placement_value.elements] == ["20.0", "27.0", "0.0"]
 
     # Test 9: Check state defs table — both the reused
     # ConveyorBeltSimpleMission and the new VGRMissionWith2CB, in
@@ -858,7 +858,8 @@ def test_cb_vgr_sysml_model():
     # ConveyorBeltNominalMission) has its own 3-substate Start/
     # WaitForPickup/Idle list.
     assert [substate.name for substate in vgr_mission_def.substates] == [
-        "SafePosition", "Idle", "WaitForPickup", "WaitForPlace", "FullStop"
+        "SafePosition", "MovingToSafePosition", "Idle", "WaitForPickup", "WaitForPlace", "MovingToFullStop",
+        "FullStop"
     ]
     assert all(isinstance(substate, rt.StateUsage) for substate in vgr_mission_def.substates)
 

@@ -57,7 +57,7 @@ class RuntimeState(EObject, metaclass=MetaEClass):
         for element in self.elements:
             if element.name == attr_name:
                 return element
-        raise Exception(attr_name + " not found in RuntimeState")
+        raise AttributeError(attr_name + " not found in RuntimeState")
 
 
 class ASTElementPosition(EObject, metaclass=MetaEClass):

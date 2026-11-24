@@ -173,9 +173,13 @@ package TokenDepoSystem {
             state CheckCapacity;
             accept when tokenDepoInstance.tokenCount > 30
                 do tokenDepoInstance.emptyReceiver
-                then StopMachine;
+                then EmptyingReceiver;
             accept when tokenDepoInstance.tokenCount <= 30
                 then Idle;
+
+            state EmptyingReceiver;
+            accept TokenDepoSuccessEventMessage via tokenDepoInstance
+                then StopMachine;
 
             state StopMachine {
                 entry tokenDepoInstance.storeToken;
@@ -434,6 +438,10 @@ package VacuumGripperSystem {
             state SafePosition;
             accept VGRCommandSuccessEventMessage via vgrOne 
                 do vgrOne.moveToSafePosition
+                then MovingToSafePosition;
+
+            state MovingToSafePosition;
+            accept VGRCommandSuccessEventMessage via vgrOne
                 then Idle;
 
             state Idle; 
@@ -444,7 +452,7 @@ package VacuumGripperSystem {
                 then WaitForPickup;
             accept StopEventMessage via vgrOne
                 do vgrOne.moveToSafePosition
-                then FullStop;
+                then MovingToFullStop;
 
             state WaitForPickup;
             accept VGRCommandSuccessEventMessage via vgrOne
@@ -460,6 +468,10 @@ package VacuumGripperSystem {
             state WaitForPlace;
             accept VGRCommandSuccessEventMessage via vgrOne
                 then Idle;
+
+            state MovingToFullStop;
+            accept VGRCommandSuccessEventMessage via vgrOne
+                then FullStop;
 
             state FullStop {
                 entry vgrOne.stop;
@@ -490,7 +502,7 @@ package VacuumGripperSystem {
                 then WaitForPickup;
             accept StopEventMessage via vgr
                 do vgr.moveToSafePosition
-                then FullStop;
+                then MovingToFullStop;
 
             state WaitForPickup;
             accept VGRCommandSuccessEventMessage via vgr
@@ -503,6 +515,10 @@ package VacuumGripperSystem {
             accept VGRCommandSuccessEventMessage via vgr
                 then Idle;
             
+            state MovingToFullStop;
+            accept VGRCommandSuccessEventMessage via vgr
+                then FullStop;
+
             state FullStop {
                 entry vgr.stop;
             }
@@ -533,7 +549,7 @@ package VacuumGripperSystem {
                 then WaitForPickup;
             accept StopEventMessage via vgr
                 do vgr.moveToSafePosition
-                then FullStop;
+                then MovingToFullStop;
 
             state WaitForPickup;
             accept VGRCommandSuccessEventMessage via vgr
@@ -546,6 +562,10 @@ package VacuumGripperSystem {
             accept VGRCommandSuccessEventMessage via vgr
                 then Idle;
             
+            state MovingToFullStop;
+            accept VGRCommandSuccessEventMessage via vgr
+                then FullStop;
+
             state FullStop {
                 entry vgr.stop;
             }

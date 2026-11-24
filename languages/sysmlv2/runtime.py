@@ -738,6 +738,27 @@ class StateDef(ElementDefinition, metaclass=MetaEClass):
             substate.contained_transitions.append(transition)
 
 
+# class BranchingCondition(RuntimeStateElement, metaclass=MetaEClass):
+#
+#     @operation(result=lambda node, runtime: node.condition.evaluate(runtime))
+#     def evaluate(self, runtime: RuntimeState):
+#
+#
+# class BranchingPoint(RuntimeStateElement, metaclass=MetaEClass):
+#
+#     condition = EReference(eType=BranchingCondition, lower=1, upper=1, containment=False)
+#     branches = EReference(eType=Argument, lower=0, upper=-1, containment=True)
+#
+#     @operation(result=lambda node, runtime: node.condition.evaluate(runtime))
+#     def evaluate(self, runtime: RuntimeState):
+#
+#
+#     pass
+#
+# class Branches(ElementDefinition, metaclass=MetaEClass):
+#
+#     pass
+
 class ExecutableStateUsage(ElementDefinition, metaclass=MetaEClass):
     """Runtime registry entry for a StateUsage declared outside any
     StateDefinition (e.g. `main : MySimulationDefinition`) — an actual,
